@@ -1,0 +1,31 @@
+{
+  "sellItem": "Déposer une annonce",
+  "searchPlaceholder": "Chercher un article...",
+  "filters": "Filtrer",
+  "allCategories": "Toutes catégories",
+  "allConditions": "Tous états",
+  "price": "Prix",
+  "location": "Localisation",
+  "condition": "État",
+  "new": "Neuf",
+  "likeNew": "Comme neuf",
+  "good": "Bon état",
+  "used": "Occasion",
+  "contact": "Contacter",
+  "addToFavorites": "Ajouter aux favoris",
+  "removeFromFavorites": "Retirer des favoris",
+  "noItems": "Aucun article trouvé",
+  "postFirstItem": "Soyez le premier à déposer une annonce !",
+  "clearAll": "Effacer tout",
+  "applyFilters": "Appliquer",
+  "reset": "Réinitialiser",
+  "categories": {
+    "vetements": "Vêtements",
+    "jouets": "Jouets",
+    "mobilier": "Mobilier",
+    "livres": "Livres",
+    "poussettes": "Poussettes & Sièges",
+    "transport": "Transport",
+    "autres": "Autres"
+  }
+}

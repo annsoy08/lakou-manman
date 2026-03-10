@@ -1,0 +1,31 @@
+{
+  "sellItem": "Vann yon atik",
+  "searchPlaceholder": "Chèche yon atik...",
+  "filters": "Filtre",
+  "allCategories": "Toutes kategori yo",
+  "allConditions": "Toutes kondisyon yo",
+  "price": "Pri",
+  "location": "Lokasyon",
+  "condition": "Kondisyon",
+  "new": "Nèf",
+  "likeNew": "Tankou nèf",
+  "good": "Bon eta",
+  "used": "Itilize",
+  "contact": "Kontakte",
+  "addToFavorites": "Ajoute nan favori",
+  "removeFromFavorites": "Retire nan favori",
+  "noItems": "Pa gen atik pou kounye a",
+  "postFirstItem": "Dwe premye moun ki pibliye yon atik !",
+  "clearAll": "Tout efase",
+  "applyFilters": "Applike",
+  "reset": "Reyinisye",
+  "categories": {
+    "vetements": "Rad",
+    "jouets": "Jwèt",
+    "mobilier": "Mèb",
+    "livres": "Liv",
+    "poussettes": "Pousèt & Siège",
+    "transport": "Transpò",
+    "autres": "Lòt"
+  }
+}

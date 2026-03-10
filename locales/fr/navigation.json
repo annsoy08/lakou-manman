@@ -1,0 +1,18 @@
+{
+  "home": "Accueil",
+  "feed": "Communauté",
+  "groups": "Groupes",
+  "doctor": "Pédiatre",
+  "tools": "Outils",
+  "guides": "Guides",
+  "boutique": "Boutique",
+  "messages": "Messages",
+  "favorites": "Favoris",
+  "notifications": "Notifications",
+  "profile": "Profil",
+  "login": "Se connecter",
+  "register": "S'inscrire",
+  "logout": "Se déconnecter",
+  "admin": "Administration",
+  "settings": "Paramètres"
+}
