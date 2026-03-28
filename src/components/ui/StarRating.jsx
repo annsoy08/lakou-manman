@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Star } from "lucide-react";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { getUserRating } from "@/lib/firestore";
 
 export default function StarRating({ 
   rating = 0, 
@@ -56,18 +58,48 @@ export default function StarRating({
 
 // Rating display component for showing user ratings
 export function RatingDisplay({ userId, size = "sm", showCount = true }) {
+  const { t } = useLanguage();
   const [rating, setRating] = useState({ average: 0, count: 0 });
   const [loading, setLoading] = useState(true);
 
   // This would normally load from Firestore
   // For now, using placeholder
-  useState(() => {
-    // Simulate loading rating
-    setTimeout(() => {
-      setRating({ average: 4.2, count: 12 });
-      setLoading(false);
-    }, 500);
-  });
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRating() {
+      if (!userId) {
+        if (!cancelled) {
+          setRating({ average: 0, count: 0 });
+          setLoading(false);
+        }
+        return;
+      }
+
+      setLoading(true);
+
+      try {
+        const nextRating = await getUserRating(userId);
+        if (!cancelled) {
+          setRating(nextRating);
+        }
+      } catch {
+        if (!cancelled) {
+          setRating({ average: 0, count: 0 });
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadRating();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   if (loading) {
     return (
@@ -86,7 +118,7 @@ export function RatingDisplay({ userId, size = "sm", showCount = true }) {
     return (
       <div className="flex items-center gap-1 text-sm text-slate-400">
         <Star className="h-4 w-4 fill-slate-200 text-slate-300" />
-        <span>Pas encore noté</span>
+        <span>{t("notRatedYet") || "Pas encore noté"}</span>
       </div>
     );
   }

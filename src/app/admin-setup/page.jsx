@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { updateUserProfile } from "@/lib/firestore";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ const ADMIN_SECRET = "lakoumanman2024";
 
 export default function AdminSetupPage() {
   const { user, userProfile, refreshProfile } = useAuth();
+  const router = useRouter();
   const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
@@ -30,7 +32,10 @@ export default function AdminSetupPage() {
     setLoading(true);
     try {
       await updateUserProfile(user.uid, { role: "admin" });
-      await refreshProfile();
+      const updatedProfile = await refreshProfile();
+      if (updatedProfile?.role !== "admin") {
+        throw new Error("Le rôle admin n'a pas pu être confirmé.");
+      }
       setSuccess(true);
     } catch (e) {
       setError("Erè: " + e.message);
@@ -68,7 +73,7 @@ export default function AdminSetupPage() {
             </p>
             <Button
               className="mt-6 rounded-2xl bg-gradient-to-r from-[#9B2335] to-[#6B1525]"
-              onClick={() => window.location.href = "/admin"}
+              onClick={() => router.push("/admin")}
             >
               <ShieldCheck className="mr-2 h-4 w-4" />
               Ale nan Admin

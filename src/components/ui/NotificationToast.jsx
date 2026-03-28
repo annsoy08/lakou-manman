@@ -5,10 +5,108 @@ import { Bell, X, MessageCircle, Heart, ShoppingBag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useRouter } from "next/navigation";
+import { useLanguage } from "@/contexts/LanguageContext";
+
+const playedToneNotificationIds = new Set();
+let audioPlaybackUnlocked = false;
 
 export default function NotificationToast({ notification, onClose }) {
   const router = useRouter();
+  const { t } = useLanguage();
   const [visible, setVisible] = useState(true);
+  const hasUserActivation = Boolean(
+    typeof window !== "undefined"
+      && window.navigator
+      && window.navigator.userActivation
+      && window.navigator.userActivation.hasBeenActive
+  );
+  const notificationId = notification && notification.id ? notification.id : "";
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (window.navigator && window.navigator.userActivation && window.navigator.userActivation.hasBeenActive) {
+      audioPlaybackUnlocked = true;
+      return;
+    }
+
+    const unlockAudioPlayback = () => {
+      audioPlaybackUnlocked = true;
+    };
+
+    window.addEventListener("pointerdown", unlockAudioPlayback, { once: true, passive: true });
+    window.addEventListener("keydown", unlockAudioPlayback, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudioPlayback);
+      window.removeEventListener("keydown", unlockAudioPlayback);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!notificationId || playedToneNotificationIds.has(notificationId)) {
+      return;
+    }
+
+    if (!audioPlaybackUnlocked && !hasUserActivation) {
+      return;
+    }
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      return;
+    }
+
+    playedToneNotificationIds.add(notificationId);
+
+    const audioContext = new AudioContextClass();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    const now = audioContext.currentTime;
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, now);
+    gainNode.gain.setValueAtTime(0.0001, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.08, now + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    const playTone = async () => {
+      try {
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+        if (audioContext.state !== "running") {
+          audioContext.close().catch(() => {});
+          return;
+        }
+        oscillator.start(now);
+        oscillator.stop(now + 0.24);
+      } catch {
+        audioContext.close().catch(() => {});
+      }
+    };
+
+    oscillator.onended = () => {
+      audioContext.close().catch(() => {});
+    };
+
+    playTone();
+
+    return () => {
+      if (audioContext.state !== "closed") {
+        audioContext.close().catch(() => {});
+      }
+    };
+  }, [hasUserActivation, notificationId]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -64,7 +162,7 @@ export default function NotificationToast({ notification, onClose }) {
               className="mt-2 h-auto p-0 text-xs text-[#9B2335]"
               onClick={handleClick}
             >
-              Wè →
+              {t("view")} →
             </Button>
           )}
         </div>
@@ -82,7 +180,7 @@ export default function NotificationToast({ notification, onClose }) {
   );
 }
 
-export function NotificationContainer({ notifications }) {
+export function NotificationContainer({ notifications, onClose }) {
   return (
     <div className="fixed top-20 right-4 z-50 space-y-2">
       {notifications.map((notification, index) => (
@@ -90,7 +188,9 @@ export function NotificationContainer({ notifications }) {
           key={`${notification.id}-${index}`}
           notification={notification}
           onClose={() => {
-            // Remove notification logic would go here
+            if (typeof onClose === "function") {
+              onClose(notification.id);
+            }
           }}
         />
       ))}

@@ -1,6 +1,6 @@
 # Lakou Manman — Kominote Manman Ayisyèn
 
-Yon platfòm entèaktif pou manman ayisyèn jwenn konsèy, sipò, epi pataje eksperyans yo.
+Yon platfòm entèraktif pou manman ayisyèn jwenn konsèy, sipò, epi pataje eksperyans yo.
 
 ## Stack Technique
 

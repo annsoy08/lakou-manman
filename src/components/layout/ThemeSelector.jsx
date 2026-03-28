@@ -6,7 +6,7 @@ import { useState } from "react";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function ThemeSelector() {
-  const { themeId, themes, changeTheme } = useTheme();
+  const { themeId, themes, changeTheme, currentTheme } = useTheme();
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
 
@@ -14,11 +14,17 @@ export default function ThemeSelector() {
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-rose-100 hover:text-[#9B2335]"
+        className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/70 bg-white/80 text-slate-600 shadow-sm transition-colors hover:text-[#9B2335]"
+        style={{ boxShadow: `0 8px 20px -16px ${currentTheme.accent}` }}
         aria-label={t("changeTheme")}
         title={t("changeTheme")}
       >
-        <Palette className="h-5 w-5" />
+        <div
+          className="flex h-6 w-6 items-center justify-center rounded-full border border-white"
+          style={{ backgroundColor: currentTheme.swatch }}
+        >
+          <Palette className="h-3.5 w-3.5 text-white" />
+        </div>
       </button>
 
       {open && (
@@ -34,14 +40,17 @@ export default function ThemeSelector() {
                     changeTheme(theme.id);
                     setOpen(false);
                   }}
-                  className={`group relative flex flex-col items-center gap-1 rounded-xl p-2 transition-all hover:bg-slate-50 ${
+                  className={`group relative flex flex-col items-center gap-1 rounded-xl border border-transparent p-2 transition-all hover:bg-slate-50 ${
                     themeId === theme.id ? "ring-2 ring-[#9B2335] ring-offset-1" : ""
                   }`}
                   title={t(theme.labelKey)}
                 >
                   <div
-                    className="h-8 w-8 rounded-full shadow-inner transition-transform group-hover:scale-110"
-                    style={{ backgroundColor: theme.swatch }}
+                    className="h-9 w-9 rounded-full border-2 border-white shadow-inner transition-transform group-hover:scale-110"
+                    style={{
+                      background: `linear-gradient(135deg, ${theme.surface} 0%, ${theme.swatch} 100%)`,
+                      boxShadow: `0 10px 24px -18px ${theme.accent}`,
+                    }}
                   />
                   {themeId === theme.id && (
                     <Check className="absolute right-1 top-1 h-3 w-3 text-[#9B2335]" />

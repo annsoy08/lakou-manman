@@ -106,8 +106,8 @@ export default function PromoBanner() {
         <div className="absolute left-1/3 -top-10 h-24 w-24 rounded-full bg-white/5 blur-2xl" />
       </div>
 
-      <div className="relative mx-auto max-w-7xl px-4 py-3.5 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-2">
+      <div className="app-shell-container relative py-3.5">
+        <div className="flex items-start gap-2 sm:items-center">
           <button
             onClick={prev}
             className="hidden sm:flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-all hover:bg-white/25 hover:scale-110"
@@ -115,26 +115,26 @@ export default function PromoBanner() {
             <ChevronLeft className="h-4 w-4" />
           </button>
 
-          <div className={`flex flex-1 items-center justify-between gap-4 transition-all duration-300 ease-in-out ${slideClass}`}>
-            <div className="flex items-center gap-3 min-w-0">
+          <div className={`flex min-w-0 flex-1 flex-col gap-3 transition-all duration-300 ease-in-out sm:flex-row sm:items-center sm:justify-between sm:gap-4 ${slideClass}`}>
+            <div className="flex min-w-0 items-start gap-3 sm:items-center">
               <div className="hidden sm:flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/20 shadow-inner">
                 <Icon className="h-5 w-5 text-white drop-shadow" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-base font-bold text-white drop-shadow">{promo.title}</span>
+                  <span className="line-clamp-1 text-sm font-bold text-white drop-shadow sm:text-base">{promo.title}</span>
                   <span className="hidden md:inline-flex rounded-full bg-white/25 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest text-white shadow-sm">
                     Promo
                   </span>
                 </div>
-                <p className="truncate text-sm text-white/85">{promo.description}</p>
+                <p className="line-clamp-2 text-xs text-white/85 sm:truncate sm:text-sm">{promo.description}</p>
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Link href={promo.link}>
+            <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
+              <Link href={promo.link} className="w-full sm:w-auto">
                 <Button
                   size="sm"
-                  className="rounded-full bg-white px-5 text-sm font-bold shadow-lg hover:bg-white/95 hover:shadow-xl hover:scale-105 transition-all"
+                  className="w-full rounded-full bg-white px-4 text-sm font-bold shadow-lg transition-all hover:scale-105 hover:bg-white/95 hover:shadow-xl sm:w-auto sm:px-5"
                   style={{ color: promo.btnColor }}
                 >
                   {promo.cta}

@@ -10,34 +10,73 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Users } from "lucide-react";
 
+function getGroupMemberIds(group = {}) {
+  return Array.from(
+    new Set(
+      [
+        ...(Array.isArray(group.members) ? group.members : []),
+        ...(Array.isArray(group.adminIds) ? group.adminIds : []),
+        ...(Array.isArray(group.moderatorIds) ? group.moderatorIds : []),
+        typeof group.ownerId === "string" ? group.ownerId : "",
+        typeof group.createdBy === "string" ? group.createdBy : "",
+      ].filter((value) => typeof value === "string" && value.trim())
+    )
+  );
+}
+
+function normalizeGroupRecord(group = {}) {
+  const memberIds = getGroupMemberIds(group);
+
+  return {
+    ...group,
+    members: memberIds,
+    membersCount: memberIds.length,
+  };
+}
+
 const getDefaultGroups = (t) => [
-  { id: "nouveau-ne", name: t("groupNewborn"), description: t("groupNewbornDesc"), membersCount: 268, color: "bg-rose-50 text-rose-700" },
-  { id: "post-partum", name: t("groupPostpartum"), description: t("groupPostpartumDesc"), membersCount: 194, color: "bg-pink-50 text-pink-700" },
-  { id: "diaspora", name: t("groupDiaspora"), description: t("groupDiasporaDesc"), membersCount: 321, color: "bg-sky-50 text-sky-700" },
-  { id: "alimentation", name: t("groupFeeding"), description: t("groupFeedingDesc"), membersCount: 149, color: "bg-emerald-50 text-emerald-700" },
-  { id: "travay-fanmi", name: t("groupWorkFamily"), description: t("groupWorkFamilyDesc"), membersCount: 116, color: "bg-violet-50 text-violet-700" },
-  { id: "deuil-perte", name: t("groupGriefLoss"), description: t("groupGriefLossDesc"), membersCount: 87, color: "bg-slate-50 text-slate-700" },
+  { id: "nouveau-ne", name: t("groupNewborn"), description: t("groupNewbornDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-rose-50 text-rose-700" },
+  { id: "enfants", name: t("groupChildren"), description: t("groupChildrenDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-emerald-50 text-emerald-700" },
+  { id: "adolescents", name: t("groupTeens"), description: t("groupTeensDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-indigo-50 text-indigo-700" },
+  { id: "post-partum", name: t("groupPostpartum"), description: t("groupPostpartumDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-pink-50 text-pink-700" },
+  { id: "diaspora", name: t("groupDiaspora"), description: t("groupDiasporaDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-sky-50 text-sky-700" },
+  { id: "alimentation", name: t("groupFeeding"), description: t("groupFeedingDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-emerald-50 text-emerald-700" },
+  { id: "travay-fanmi", name: t("groupWorkFamily"), description: t("groupWorkFamilyDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-violet-50 text-violet-700" },
+  { id: "paran-otis", name: t("groupAutismParents"), description: t("groupAutismParentsDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-cyan-50 text-cyan-700" },
+  { id: "deuil-perte", name: t("groupGriefLoss"), description: t("groupGriefLossDesc"), membersCount: 0, members: [], adminIds: [], moderatorIds: [], color: "bg-slate-50 text-slate-700" },
 ];
 
 export default function GroupsPage() {
   const { user } = useAuth();
-  const { t } = useLanguage();
-  const [groups, setGroups] = useState(getDefaultGroups(t));
+  const { t, language } = useLanguage();
+  const [groups, setGroups] = useState(getDefaultGroups(t).map(normalizeGroupRecord));
   const [loadingId, setLoadingId] = useState(null);
 
   useEffect(() => {
     async function load() {
+      const defaultGroups = getDefaultGroups(t);
+      const builtInGroupIds = new Set(defaultGroups.map((group) => group.id));
       try {
         const firestoreGroups = await getGroups();
-        if (firestoreGroups.length > 0) {
-          setGroups(firestoreGroups);
-        }
+        const mergedGroupsMap = new Map(defaultGroups.map((group) => [group.id, group]));
+        firestoreGroups.forEach((group) => {
+          const existingGroup = mergedGroupsMap.get(group.id) || {};
+          const isBuiltInGroup = builtInGroupIds.has(group.id);
+          mergedGroupsMap.set(group.id, {
+            ...existingGroup,
+            ...group,
+            name: isBuiltInGroup ? existingGroup.name : (group.name || existingGroup.name),
+            description: isBuiltInGroup ? existingGroup.description : (group.description || existingGroup.description),
+            color: group.color || existingGroup.color,
+          });
+        });
+        setGroups(Array.from(mergedGroupsMap.values()).map(normalizeGroupRecord));
       } catch (err) {
-        console.error("Error loading groups:", err);
+        setGroups(defaultGroups.map(normalizeGroupRecord));
       }
     }
     load();
-  }, []);
+  }, [language, t]);
 
   async function handleJoin(groupId) {
     if (!user) return;
@@ -47,7 +86,7 @@ export default function GroupsPage() {
       setGroups((prev) =>
         prev.map((g) =>
           g.id === groupId
-            ? { ...g, membersCount: (g.membersCount || 0) + 1, members: [...(g.members || []), user.uid] }
+            ? normalizeGroupRecord({ ...g, members: [...(g.members || []), user.uid] })
             : g
         )
       );
@@ -58,8 +97,73 @@ export default function GroupsPage() {
     }
   }
 
+  async function handleLeave(groupId) {
+    if (!user) return;
+    setLoadingId(groupId);
+    try {
+      await leaveGroup(groupId, user.uid);
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.id === groupId
+            ? normalizeGroupRecord({ ...g, members: (g.members || []).filter((memberId) => memberId !== user.uid) })
+            : g
+        )
+      );
+    } catch (err) {
+      console.error("Leave error:", err);
+    } finally {
+      setLoadingId(null);
+    }
+  }
+
   function isMember(group) {
     return user && group.members?.includes(user.uid);
+  }
+
+  const activeGroups = user ? groups.filter((group) => isMember(group)) : [];
+  const discoverGroups = user ? groups.filter((group) => !isMember(group)) : groups;
+
+  function renderGroupCard(group) {
+    return (
+      <Card key={group.id} className="group rounded-[2rem] border-0 shadow-sm card-hover">
+        <CardHeader>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            <CardTitle className="break-words text-lg">{group.name}</CardTitle>
+            <Badge className={`w-fit rounded-full ${group.color || "bg-slate-100 text-slate-700"} hover:opacity-90`}>
+              {group.membersCount || 0} {t("members")}
+            </Badge>
+          </div>
+          <CardDescription>
+            {group.description || t("groupDefaultDescription")}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            {isMember(group) ? (
+              <Button
+                variant="outline"
+                className="w-full rounded-2xl sm:w-auto"
+                onClick={() => handleLeave(group.id)}
+                disabled={loadingId === group.id}
+              >
+                {loadingId === group.id ? t("leavingGroup") : t("leaveGroup")}
+              </Button>
+            ) : (
+              <Button
+                className="w-full rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 shadow-sm shadow-sky-200 transition-all hover:shadow-md hover:scale-[1.02] sm:w-auto"
+                onClick={() => handleJoin(group.id)}
+                disabled={loadingId === group.id || !user}
+              >
+                {loadingId === group.id ? t("joiningGroup") : t("joinGroup")}
+              </Button>
+            )}
+            <Link href={`/groups/${group.id}`} className="inline-flex w-full items-center justify-center rounded-2xl border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground sm:w-auto">
+              {t("seePosts")}
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
@@ -76,45 +180,49 @@ export default function GroupsPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {groups.map((group) => (
-          <Card key={group.id} className="group rounded-[2rem] border-0 shadow-sm card-hover">
-            <CardHeader>
-              <div className="flex items-center justify-between gap-4">
-                <CardTitle className="text-lg">{group.name}</CardTitle>
-                <Badge className={`rounded-full ${group.color || "bg-slate-100 text-slate-700"} hover:opacity-90`}>
-                  {group.membersCount || 0} {t("members")}
-                </Badge>
+      {user ? (
+        <div className="space-y-8">
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">{t("activeGroups")}</h2>
+            </div>
+            {activeGroups.length ? (
+              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                {activeGroups.map((group) => renderGroupCard(group))}
               </div>
-              <CardDescription>
-                {group.description || t("groupDefaultDescription")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-3">
-                {isMember(group) ? (
-                  <Button variant="outline" className="rounded-2xl" disabled>
-                    {t("alreadyMember")}
-                  </Button>
-                ) : (
-                  <Button
-                    className="rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 shadow-sm shadow-sky-200 transition-all hover:shadow-md hover:scale-[1.02]"
-                    onClick={() => handleJoin(group.id)}
-                    disabled={loadingId === group.id || !user}
-                  >
-                    {loadingId === group.id ? t("joiningGroup") : t("joinGroup")}
-                  </Button>
-                )}
-                <Link href={`/groups/${group.id}`}>
-                  <Button variant="outline" className="rounded-2xl">
-                    {t("seePosts")}
-                  </Button>
-                </Link>
+            ) : (
+              <Card className="rounded-[2rem] border border-dashed border-slate-200 shadow-none">
+                <CardContent className="p-6 text-sm text-slate-500">{t("noActiveGroups")}</CardContent>
+              </Card>
+            )}
+          </section>
+
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">{t("discoverGroups")}</h2>
+            </div>
+            {discoverGroups.length ? (
+              <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                {discoverGroups.map((group) => renderGroupCard(group))}
               </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            ) : (
+              <Card className="rounded-[2rem] border border-dashed border-slate-200 shadow-none">
+                <CardContent className="p-6 text-sm text-slate-500">{t("noDiscoverGroups")}</CardContent>
+              </Card>
+            )}
+          </section>
+        </div>
+      ) : (
+        <section className="space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">{t("discoverGroups")}</h2>
+            <p className="text-sm text-slate-500">{t("signInToJoinGroups")}</p>
+          </div>
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+            {discoverGroups.map((group) => renderGroupCard(group))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

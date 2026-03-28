@@ -3,14 +3,18 @@
 import { createContext, useContext, useState, useEffect } from "react";
 
 const themes = [
-  { id: "rose", labelKey: "rosePale", color: "#fecdd3", swatch: "#fb7185" },
-  { id: "grenat", labelKey: "grenadinFonce", color: "#f9a8b8", swatch: "#e84073" },
-  { id: "peche", labelKey: "peche", color: "#fed7aa", swatch: "#fb923c" },
-  { id: "ble-fonce", labelKey: "bleFonce", color: "#bfdbfe", swatch: "#1e40af" },
-  { id: "ciel", labelKey: "cielBleu", color: "#bae6fd", swatch: "#38bdf8" },
-    { id: "orange", labelKey: "orange", color: "#fed7aa", swatch: "#fb923c" },
-  { id: "soleil", labelKey: "soleil", color: "#fde68a", swatch: "#fbbf24" },
+  { id: "rose", labelKey: "rosePale", color: "#fff1f2", surface: "#ffe4e6", swatch: "#fb7185", accent: "#e11d48" },
+  { id: "grenat", labelKey: "grenadinFonce", color: "#fff1f2", surface: "#fecdd3", swatch: "#be123c", accent: "#9f1239" },
+  { id: "peche", labelKey: "peche", color: "#fff7ed", surface: "#fed7aa", swatch: "#fb923c", accent: "#ea580c" },
+  { id: "ble-fonce", labelKey: "bleFonce", color: "#eff6ff", surface: "#bfdbfe", swatch: "#1d4ed8", accent: "#1e40af" },
+  { id: "ciel", labelKey: "cielBleu", color: "#f0f9ff", surface: "#bae6fd", swatch: "#38bdf8", accent: "#0284c7" },
+  { id: "orange", labelKey: "orange", color: "#fff7ed", surface: "#fdba74", swatch: "#f97316", accent: "#ea580c" },
+  { id: "soleil", labelKey: "soleil", color: "#fffbeb", surface: "#fde68a", swatch: "#fbbf24", accent: "#d97706" },
 ];
+
+function normalizeThemeId(themeId) {
+  return themes.some((theme) => theme.id === themeId) ? themeId : themes[0].id;
+}
 
 const ThemeContext = createContext();
 
@@ -18,16 +22,34 @@ export function ThemeProvider({ children }) {
   const [themeId, setThemeId] = useState("rose");
 
   useEffect(() => {
-    const saved = localStorage.getItem("lakou-theme");
-    if (saved) setThemeId(saved);
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const savedThemeId = window.localStorage.getItem("lakou-theme");
+      if (savedThemeId) {
+        setThemeId(normalizeThemeId(savedThemeId));
+      }
+    } catch {
+    }
   }, []);
 
   function changeTheme(id) {
-    setThemeId(id);
-    localStorage.setItem("lakou-theme", id);
+    const nextThemeId = normalizeThemeId(id);
+    setThemeId(nextThemeId);
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem("lakou-theme", nextThemeId);
+    } catch {
+    }
   }
 
-  const currentTheme = themes.find((t) => t.id === themeId) || themes[0];
+  const currentTheme = themes.find((theme) => theme.id === themeId) || themes[0];
 
   return (
     <ThemeContext.Provider value={{ themeId, currentTheme, themes, changeTheme }}>

@@ -2,11 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { updateProfile as updateAuthProfile } from "firebase/auth";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { updateUserProfile } from "@/lib/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from "@/lib/firebase";
+import { getFirebaseStorage } from "@/lib/firebase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,13 +15,20 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { getInitials } from "@/lib/utils";
+import { getInitials, resolveProfilePhoto, resolveUserDisplayName } from "@/lib/utils";
 import { User, Save, Camera, MapPin, Baby, FileText } from "lucide-react";
 
 export default function ProfilePage() {
   const { user, userProfile, loading: authLoading, refreshProfile } = useAuth();
   const { t } = useLanguage();
   const router = useRouter();
+  const resolvedDisplayName = resolveUserDisplayName(userProfile, user, t("member"));
+  const [localPhoto, setLocalPhoto] = useState("");
+  const profilePhoto = localPhoto || resolveProfilePhoto(
+    userProfile?.photo,
+    user?.photoURL,
+    userProfile?.photoUpdatedAt || userProfile?.updatedAt
+  );
   const [form, setForm] = useState({
     name: "",
     city: "",
@@ -41,14 +49,17 @@ export default function ProfilePage() {
   useEffect(() => {
     if (userProfile) {
       setForm({
-        name: userProfile.name || "",
+        name: resolveUserDisplayName(userProfile, user, ""),
         city: userProfile.city || "",
         country: userProfile.country || "",
         childAges: userProfile.childAges || "",
         bio: userProfile.bio || "",
       });
     }
-  }, [userProfile]);
+    if (userProfile?.photo || user?.photoURL) {
+      setLocalPhoto("");
+    }
+  }, [userProfile, user]);
 
   function updateField(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -57,10 +68,14 @@ export default function ProfilePage() {
   async function handleSave(e) {
     e.preventDefault();
     if (!user) return;
+    if (!form.name.trim()) return;
     setSaving(true);
     setSuccess(false);
     try {
-      await updateUserProfile(user.uid, form);
+      await updateUserProfile(user.uid, {
+        ...form,
+        name: form.name.trim(),
+      });
       await refreshProfile();
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
@@ -74,15 +89,35 @@ export default function ProfilePage() {
   async function handlePhotoUpload(e) {
     const file = e.target.files?.[0];
     if (!file || !user) return;
+    const storage = getFirebaseStorage();
+    if (!storage) {
+      console.error("Firebase storage not available");
+      return;
+    }
     setUploading(true);
     try {
-      const storageRef = ref(storage, `avatars/${user.uid}`);
+      const extension = file.name?.split(".").pop()?.toLowerCase() || "jpg";
+      const photoVersion = Date.now();
+      const storageRef = ref(storage, `avatars/${user.uid}/${photoVersion}.${extension}`);
       await uploadBytes(storageRef, file);
       const url = await getDownloadURL(storageRef);
-      await updateUserProfile(user.uid, { photo: url });
+      setLocalPhoto(resolveProfilePhoto(url, "", photoVersion));
+      await Promise.all([
+        updateUserProfile(user.uid, {
+          photo: url,
+          photoUpdatedAt: photoVersion,
+          email: user.email || userProfile?.email || "",
+          name: resolvedDisplayName,
+          displayName: resolvedDisplayName,
+          fullName: resolvedDisplayName,
+          role: userProfile?.role || "user",
+        }),
+        updateAuthProfile(user, { photoURL: url }),
+      ]);
       await refreshProfile();
     } catch (err) {
       console.error("Upload error:", err);
+      setLocalPhoto("");
     } finally {
       setUploading(false);
     }
@@ -112,9 +147,9 @@ export default function ProfilePage() {
           <CardContent className="flex flex-col items-center p-6 text-center">
             <div className="relative">
               <Avatar className="h-24 w-24">
-                {userProfile?.photo && <AvatarImage src={userProfile.photo} />}
+                {profilePhoto && <AvatarImage src={profilePhoto} />}
                 <AvatarFallback className="bg-gradient-to-br from-rose-400 to-pink-500 text-white text-2xl">
-                  {getInitials(userProfile?.name || "U")}
+                  {getInitials(resolvedDisplayName || "U")}
                 </AvatarFallback>
               </Avatar>
               <label className="absolute bottom-0 right-0 flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-rose-500 text-white shadow-md hover:bg-rose-600">
@@ -130,7 +165,7 @@ export default function ProfilePage() {
             {uploading && (
               <p className="mt-2 text-xs text-slate-500">{t("uploadingPhoto")}</p>
             )}
-            <h2 className="mt-4 text-xl font-semibold">{userProfile?.name || "Manman"}</h2>
+            <h2 className="mt-4 text-xl font-semibold">{resolvedDisplayName}</h2>
             <div className="mt-1 flex items-center gap-1 text-sm text-slate-500">
               <MapPin className="h-3.5 w-3.5" />
               {userProfile?.city || "Diaspora"}{userProfile?.country ? `, ${userProfile.country}` : ""}
@@ -148,7 +183,7 @@ export default function ProfilePage() {
                 </Badge>
               ))}
               {(!userProfile?.badges || userProfile.badges.length === 0) && (
-                <Badge variant="outline" className="rounded-full">{t("newMom")}</Badge>
+                <Badge variant="outline" className="rounded-full">{t("member")}</Badge>
               )}
             </div>
             {userProfile?.bio && (
@@ -177,6 +212,7 @@ export default function ProfilePage() {
                   id="name"
                   value={form.name}
                   onChange={(e) => updateField("name", e.target.value)}
+                  required
                   className="rounded-xl"
                 />
               </div>

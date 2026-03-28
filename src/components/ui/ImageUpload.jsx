@@ -2,50 +2,54 @@
 
 import { useState, useRef } from "react";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from "@/lib/firebase";
+import { getFirebaseStorage } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { X, Upload, ImageIcon, Camera, Plus } from "lucide-react";
+import { X, Upload, Camera, Plus, AlertCircle } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 
-export default function ImageUpload({ images = [], onChange, maxImages = 5 }) {
+export default function ImageUpload({ images = [], onChange, maxImages = 5, pathPrefix = "shop-items" }) {
   const { t } = useLanguage();
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const fileInputRef = useRef(null);
 
   async function uploadFiles(files) {
     if (images.length + files.length > maxImages) {
-      alert(t("maxImagesAlert", { maxImages }));
+      setUploadError(t("maxImagesAlert", { maxImages }));
+      return;
+    }
+
+    const storage = getFirebaseStorage();
+    if (!storage) {
+      setUploadError(t("uploadError"));
       return;
     }
 
     setUploading(true);
+    setUploadError("");
     const newImages = [];
 
     for (const file of files) {
       if (!file.type.startsWith("image/")) {
-        alert(t("imageTypeAlert"));
+        setUploadError(t("imageTypeAlert"));
         continue;
       }
 
       if (file.size > 5 * 1024 * 1024) {
-        alert(t("imageSizeAlert"));
+        setUploadError(t("imageSizeAlert"));
         continue;
       }
 
       try {
-        // Create unique filename
         const timestamp = Date.now();
         const filename = `${timestamp}-${file.name}`;
-        const storageRef = ref(storage, `shop-items/${filename}`);
+        const storageRef = ref(storage, `${pathPrefix}/${filename}`);
 
-        // Upload file
         await uploadBytes(storageRef, file);
-        
-        // Get download URL
         const downloadURL = await getDownloadURL(storageRef);
-        
+
         newImages.push({
           url: downloadURL,
           name: file.name,
@@ -53,7 +57,7 @@ export default function ImageUpload({ images = [], onChange, maxImages = 5 }) {
         });
       } catch (error) {
         console.error("Error uploading image:", error);
-        alert(t("uploadError"));
+        setUploadError(t("uploadError"));
       }
     }
 
@@ -94,6 +98,13 @@ export default function ImageUpload({ images = [], onChange, maxImages = 5 }) {
 
   return (
     <div className="space-y-4">
+      {uploadError && (
+        <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>{uploadError}</p>
+        </div>
+      )}
+
       {/* Upload area */}
       {images.length < maxImages && (
         <Card

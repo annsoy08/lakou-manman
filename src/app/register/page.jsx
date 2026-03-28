@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
@@ -10,10 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Home, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 
 export default function RegisterPage() {
-  const { register } = useAuth();
+  const { register, signInWithGoogle, user, loading: authLoading } = useAuth();
   const { t } = useLanguage();
   const router = useRouter();
   const [form, setForm] = useState({
@@ -29,6 +29,20 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/");
+    }
+  }, [authLoading, user, router]);
+
+  if (authLoading || user) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center text-sm text-slate-500">
+        {t("loading")}
+      </div>
+    );
+  }
+
   function updateField(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
@@ -41,6 +55,14 @@ export default function RegisterPage() {
       setError(t("passwordsNotMatch"));
       return;
     }
+    if (!form.name.trim()) {
+      setError(t("nameRequired"));
+      return;
+    }
+    if (!form.email.trim()) {
+      setError(t("emailRequired"));
+      return;
+    }
     if (form.password.length < 6) {
       setError(t("passwordMinLength"));
       return;
@@ -49,20 +71,50 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       await register(form.email, form.password, {
-        name: form.name,
+        name: form.name.trim(),
         city: form.city,
         country: form.country,
         childAges: form.childAges,
         bio: form.bio,
       });
-      router.push("/feed");
+      router.replace("/");
     } catch (err) {
       if (err.code === "auth/email-already-in-use") {
         setError(t("emailAlreadyInUse"));
+      } else if (err.code === "auth/missing-email") {
+        setError(t("emailRequired"));
+      } else if (err.code === "auth/missing-name") {
+        setError(t("nameRequired"));
       } else if (err.code === "auth/weak-password") {
         setError(t("passwordTooWeak"));
+      } else if (err.code === "auth/network-request-failed") {
+        setError(t("networkError"));
       } else {
         setError(t("genericError"));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleGoogleSignUp() {
+    setError("");
+    setLoading(true);
+
+    try {
+      await signInWithGoogle();
+      router.replace("/");
+    } catch (err) {
+      if (err.code === "auth/missing-email") {
+        setError(t("googleAccountEmailRequired"));
+      } else if (err.code === "auth/operation-not-allowed") {
+        setError(t("googleSignInNotEnabled"));
+      } else if (err.code === "auth/network-request-failed") {
+        setError(t("networkError"));
+      } else if (err.code === "auth/popup-closed-by-user") {
+        setError("");
+      } else {
+        setError(t("googleSignInFailed"));
       }
     } finally {
       setLoading(false);
@@ -75,15 +127,17 @@ export default function RegisterPage() {
         <div className="absolute -left-32 -top-32 h-80 w-80 rounded-full bg-rose-200/40 blur-3xl" />
         <div className="absolute -bottom-32 -right-32 h-80 w-80 rounded-full bg-pink-200/40 blur-3xl" />
       </div>
-      <Card className="w-full max-w-lg rounded-[2rem] border-0 shadow-xl shadow-rose-100/50">
+      <Card className="w-full max-w-lg rounded-[2rem] border-0 bg-white shadow-xl shadow-rose-100/50">
         <CardHeader className="text-center pb-2">
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 shadow-lg shadow-rose-200">
-            <Home className="h-7 w-7 text-white" />
-          </div>
+          <img src="/logo-lakou-manman.png" alt="Lakou Manman" className="mx-auto mb-4 h-24 w-auto" />
           <CardTitle className="font-display text-2xl">{t("createAccount")}</CardTitle>
           <CardDescription>{t("joinCommunity")}</CardDescription>
         </CardHeader>
         <CardContent>
+          <Button type="button" variant="outline" className="mb-4 w-full rounded-xl" onClick={handleGoogleSignUp} disabled={loading}>
+            {t("createAccountWithGoogle")}
+          </Button>
+          <div className="mb-4 text-center text-xs uppercase tracking-[0.2em] text-slate-400">{t("orContinueWithEmail")}</div>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
               <div className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</div>

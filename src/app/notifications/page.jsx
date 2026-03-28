@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotifications } from "@/contexts/NotificationContext";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -12,6 +11,8 @@ import {
   MessageCircle,
   Heart,
   ShoppingBag,
+  UserPlus,
+  Users,
   Settings,
   Trash2,
   Check,
@@ -35,6 +36,10 @@ export default function NotificationsPage() {
     switch (type) {
       case "message":
         return <MessageCircle className="h-4 w-4 text-blue-500" />;
+      case "request":
+        return <UserPlus className="h-4 w-4 text-violet-500" />;
+      case "group":
+        return <Users className="h-4 w-4 text-amber-500" />;
       case "favorite":
         return <Heart className="h-4 w-4 text-red-500" />;
       case "item":
@@ -55,7 +60,7 @@ export default function NotificationsPage() {
     if (minutes < 60) return `${minutes} ${t("minutesAgo")}`;
     if (hours < 24) return `${hours} ${t("hoursAgo")}`;
     if (days < 7) return `${days} ${t("daysAgo")}`;
-    return date.toLocaleDateString("fr-HT");
+    return new Date(date).toLocaleDateString("fr-HT");
   }
 
   if (!user) {

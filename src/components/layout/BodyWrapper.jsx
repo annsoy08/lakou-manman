@@ -1,20 +1,22 @@
 "use client";
 
-import { useTheme } from "@/contexts/ThemeContext";
-import { ThemeProvider } from "@/contexts/ThemeContext";
+import AppErrorBoundary from "@/components/app/AppErrorBoundary";
+import AppRuntimeMonitor from "@/components/app/AppRuntimeMonitor";
+import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
 import { AuthProvider } from "@/contexts/AuthContext";
-import { NotificationProvider } from "@/contexts/NotificationContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
-import WelcomeBanner from "@/components/layout/WelcomeBanner";
-import Footer from "@/components/layout/Footer";
+import { NotificationProvider } from "@/contexts/NotificationContext";
 
-function ThemedBody({ children }) {
+function PlainBody({ children }) {
   const { currentTheme } = useTheme();
 
   return (
     <div
-      className="min-h-screen text-slate-900 antialiased transition-colors duration-500"
-      style={{ backgroundColor: currentTheme.color }}
+      className="relative min-h-screen text-slate-900 antialiased transition-colors duration-300"
+      style={{
+        backgroundColor: currentTheme.color,
+        backgroundImage: `radial-gradient(circle at top right, ${currentTheme.surface} 0%, transparent 42%), radial-gradient(circle at bottom left, ${currentTheme.surface} 0%, transparent 36%)`,
+      }}
     >
       {children}
     </div>
@@ -23,18 +25,19 @@ function ThemedBody({ children }) {
 
 export default function BodyWrapper({ children }) {
   return (
-    <AuthProvider>
-      <LanguageProvider>
-        <WelcomeBanner />
-        <ThemeProvider>
-          <NotificationProvider>
-            <ThemedBody>
-              {children}
-              <Footer />
-            </ThemedBody>
-          </NotificationProvider>
-        </ThemeProvider>
-      </LanguageProvider>
-    </AuthProvider>
+    <AppErrorBoundary>
+      <AuthProvider>
+        <LanguageProvider>
+          <ThemeProvider>
+            <NotificationProvider>
+              <AppErrorBoundary fallback={null}>
+                <AppRuntimeMonitor />
+              </AppErrorBoundary>
+              <PlainBody>{children}</PlainBody>
+            </NotificationProvider>
+          </ThemeProvider>
+        </LanguageProvider>
+      </AuthProvider>
+    </AppErrorBoundary>
   );
 }

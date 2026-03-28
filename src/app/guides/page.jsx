@@ -11,58 +11,101 @@ import { BookOpen, Download, FileText, ExternalLink } from "lucide-react";
 const getDefaultGuides = (t) => [
   {
     id: "1",
-    title: "Guide nouvo manman",
-    description: "Sa pou prepare pou premye 3 mwa yo. Yon guide konplè pou ede ou nan premye jou ak tibebe a.",
-    type: "PDF",
+    title: t("guideNewMomTitle"),
+    description: t("guideNewMomDesc"),
+    type: t("pdf"),
     category: t("newMom"),
     downloadUrl: null,
   },
   {
     id: "2",
-    title: "Checklist sak tibebe",
-    description: "Lis pratik pou soti ak tibebe san bliye anyen. Tout sa ou bezwen nan sak la.",
-    type: "Checklist",
+    title: t("guideChecklistBabyTitle"),
+    description: t("guideChecklistBabyDesc"),
+    type: t("checklist"),
     category: t("practical"),
     downloadUrl: null,
   },
   {
     id: "3",
-    title: "Routine dòmi tibebe",
-    description: "Yon modèl senp pou ede kreye abitid dòmi. Etap pa etap pou yon nuit pi kalm.",
-    type: "Guide",
+    title: t("guideSleepRoutineTitle"),
+    description: t("guideSleepRoutineDesc"),
+    type: t("guide"),
     category: t("sleep"),
     downloadUrl: null,
   },
   {
     id: "4",
-    title: "Alimentation tibebe 0-12 mwa",
-    description: "Ki sa pou bay tibebe manje selon laj li. Tete, fòmil, ak premye manje solid.",
-    type: "PDF",
+    title: t("guideFeedingTitle"),
+    description: t("guideFeedingDesc"),
+    type: t("pdf"),
     category: t("feeding"),
     downloadUrl: null,
   },
   {
     id: "5",
-    title: "Swen kòdonbilik",
-    description: "Kijan pou pran swen kòdonbilik tibebe a jiskaske li tonbe. Konsèy ijyèn ak sekirite.",
-    type: "Article",
+    title: t("guideBathSafetyTitle"),
+    description: t("guideBathSafetyDesc"),
+    type: t("article"),
+    category: t("health"),
+    downloadUrl: null,
+  },
+  {
+    id: "6",
+    title: t("guideChildRoutineTitle"),
+    description: t("guideChildRoutineDesc"),
+    type: t("guide"),
+    category: t("practical"),
+    downloadUrl: null,
+  },
+  {
+    id: "7",
+    title: t("guideTeenDialogueTitle"),
+    description: t("guideTeenDialogueDesc"),
+    type: t("article"),
     category: t("health"),
     downloadUrl: null,
   },
 ];
 
+const mergeGuides = (defaultGuides, firestoreGuides = []) => {
+  const mergedGuides = [...defaultGuides];
+  const seen = new Set(
+    defaultGuides.map((guide) => `${String(guide.title || "").trim().toLowerCase()}::${String(guide.type || "").trim().toLowerCase()}`)
+  );
+
+  firestoreGuides.forEach((guide) => {
+    const key = `${String(guide.title || "").trim().toLowerCase()}::${String(guide.type || "").trim().toLowerCase()}`;
+    if (!seen.has(key)) {
+      mergedGuides.push(guide);
+      seen.add(key);
+    }
+  });
+
+  return mergedGuides;
+};
+
 const typeIcons = {
-  PDF: FileText,
-  Checklist: FileText,
-  Guide: BookOpen,
-  Article: ExternalLink,
+  "PDF": FileText,
+  "Checklist": FileText,
+  "Guide": BookOpen,
+  "Article": ExternalLink,
+  // Also handle translated values
+  "pdf": FileText,
+  "checklist": FileText,
+  "guide": BookOpen,
+  "article": ExternalLink,
 };
 
 const typeColors = {
-  PDF: "bg-rose-50 text-rose-700",
-  Checklist: "bg-emerald-50 text-emerald-700",
-  Guide: "bg-sky-50 text-sky-700",
-  Article: "bg-pink-50 text-pink-700",
+  "PDF": "bg-rose-50 text-rose-700",
+  "Checklist": "bg-emerald-50 text-emerald-700",
+  "Guide": "bg-sky-50 text-sky-700",
+  "Article": "bg-pink-50 text-pink-700",
+  // Also handle translated values
+  "pdf": "bg-rose-50 text-rose-700",
+  "checklist": "bg-emerald-50 text-emerald-700",
+  "guide": "bg-sky-50 text-sky-700",
+  "article": "bg-pink-50 text-pink-700",
 };
 
 export default function GuidesPage() {
@@ -71,15 +114,22 @@ export default function GuidesPage() {
 
   useEffect(() => {
     async function load() {
+      const defaultGuides = getDefaultGuides(t);
       try {
         const data = await getGuides();
-        if (data.length > 0) setGuides(data);
+        if (data.length > 0) {
+          setGuides(mergeGuides(defaultGuides, data));
+          return;
+        }
+
+        setGuides(defaultGuides);
       } catch (err) {
         console.error("Error loading guides:", err);
+        setGuides(defaultGuides);
       }
     }
     load();
-  }, []);
+  }, [t]);
 
   return (
     <div className="space-y-6">
@@ -102,13 +152,13 @@ export default function GuidesPage() {
           return (
             <Card key={guide.id} className="rounded-[2rem] border-0 shadow-sm card-hover">
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <Badge className={`rounded-full ${color} hover:opacity-90`}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <Badge className={`w-fit max-w-full rounded-full ${color} hover:opacity-90`}>
                     <Icon className="mr-1 h-3 w-3" />
-                    {guide.type}
+                    {t(guide.type)}
                   </Badge>
                   {guide.category && (
-                    <Badge variant="outline" className="rounded-full">
+                    <Badge variant="outline" className="w-fit max-w-full rounded-full">
                       {guide.category}
                     </Badge>
                   )}
@@ -119,12 +169,12 @@ export default function GuidesPage() {
                 <p className="text-sm leading-7 text-slate-500">{guide.description}</p>
                 {guide.downloadUrl ? (
                   <a href={guide.downloadUrl} target="_blank" rel="noopener noreferrer">
-                    <Button variant="outline" className="mt-4 rounded-2xl">
+                    <Button variant="outline" className="mt-4 w-full rounded-2xl sm:w-auto">
                       <Download className="mr-2 h-4 w-4" /> {t("download")}
                     </Button>
                   </a>
                 ) : (
-                  <Button variant="outline" className="mt-4 rounded-2xl" disabled>
+                  <Button variant="outline" className="mt-4 w-full rounded-2xl sm:w-auto" disabled>
                     {t("downloadSoon")}
                   </Button>
                 )}
@@ -141,7 +191,7 @@ export default function GuidesPage() {
           <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-pink-300 blur-3xl" />
           <div className="absolute -bottom-16 -left-16 h-48 w-48 rounded-full bg-rose-300 blur-3xl" />
         </div>
-        <CardContent className="relative p-10 text-center">
+        <CardContent className="relative p-6 text-center sm:p-10">
           <div className="mx-auto mb-4 flex h-16 w-16 animate-float items-center justify-center rounded-2xl bg-gradient-to-br from-[#9B2335] to-[#6B1525] shadow-lg shadow-rose-200">
             <BookOpen className="h-8 w-8 text-white" />
           </div>

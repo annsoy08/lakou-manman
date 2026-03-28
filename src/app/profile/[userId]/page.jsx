@@ -4,13 +4,13 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { getUserProfile } from "@/lib/firestore";
-import { createConversation } from "@/lib/firestore";
+import { createConversationRequest, getUserProfile } from "@/lib/firestore";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { getInitials, formatDate } from "@/lib/utils";
+import ActionDialog from "@/components/ui/action-dialog";
+import { getInitials, formatDate, resolveProfilePhoto } from "@/lib/utils";
 import { MessageCircle, MapPin, Baby, Calendar, ArrowLeft } from "lucide-react";
 
 export default function UserProfilePage() {
@@ -21,6 +21,12 @@ export default function UserProfilePage() {
   const [targetUser, setTargetUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [messageLoading, setMessageLoading] = useState(false);
+  const [dialogState, setDialogState] = useState({
+    open: false,
+    tone: "error",
+    title: "",
+    message: "",
+  });
 
   useEffect(() => {
     loadUserProfile();
@@ -42,13 +48,27 @@ export default function UserProfilePage() {
     if (!user || user.uid === userId || !targetUser) return;
     setMessageLoading(true);
     try {
-      const conversationId = await createConversation([user.uid, userId]);
-      router.push("/messages");
+      const result = await createConversationRequest({
+        fromUserId: user.uid,
+        toUserId: userId,
+      });
+
+      if (result.status === "existing_conversation") {
+        router.push(`/messages?conversationId=${result.conversationId}`);
+      } else {
+        router.push("/messages");
+      }
     } catch (e) {
-      console.error("Error creating conversation:", e);
-      alert(t("conversationError"));
+      console.error("Error requesting conversation:", e);
+      setDialogState({
+        open: true,
+        tone: "error",
+        title: "Conversation",
+        message: t("conversationError"),
+      });
+    } finally {
+      setMessageLoading(false);
     }
-    setMessageLoading(false);
   }
 
   if (loading) {
@@ -75,6 +95,11 @@ export default function UserProfilePage() {
   }
 
   const isOwnProfile = user && user.uid === userId;
+  const targetPhoto = resolveProfilePhoto(
+    targetUser?.photo,
+    isOwnProfile ? (userProfile?.photo || user?.photoURL || "") : "",
+    targetUser?.photoUpdatedAt || targetUser?.updatedAt || (isOwnProfile ? (userProfile?.photoUpdatedAt || userProfile?.updatedAt) : "")
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-white to-pink-50">
@@ -98,7 +123,7 @@ export default function UserProfilePage() {
                 <CardContent className="relative px-8 pb-8">
                   <div className="absolute -top-16 left-8">
                     <Avatar className="h-32 w-32 ring-4 ring-white shadow-xl">
-                      {targetUser.photo && <AvatarImage src={targetUser.photo} />}
+                      {targetPhoto && <AvatarImage src={targetPhoto} />}
                       <AvatarFallback className="bg-gradient-to-br from-rose-400 to-pink-500 text-white text-2xl">
                         {getInitials(targetUser.name)}
                       </AvatarFallback>
@@ -182,6 +207,15 @@ export default function UserProfilePage() {
           </div>
         </div>
       </div>
+
+      <ActionDialog
+        open={dialogState.open}
+        tone={dialogState.tone}
+        title={dialogState.title}
+        message={dialogState.message}
+        closeLabel={t("close")}
+        onClose={() => setDialogState((prev) => ({ ...prev, open: false }))}
+      />
     </div>
   );
 }
