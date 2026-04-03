@@ -122,27 +122,29 @@ export default function GroupsPage() {
 
   const activeGroups = user ? groups.filter((group) => isMember(group)) : [];
   const discoverGroups = user ? groups.filter((group) => !isMember(group)) : groups;
+  const secondaryCount = user ? discoverGroups.length : groups.length;
+  const secondaryLabel = user ? t("discoverGroups") : t("groupsTitle");
 
   function renderGroupCard(group) {
     return (
-      <Card key={group.id} className="group rounded-[2rem] border-0 shadow-sm card-hover">
-        <CardHeader>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-            <CardTitle className="break-words text-lg">{group.name}</CardTitle>
-            <Badge className={`w-fit rounded-full ${group.color || "bg-slate-100 text-slate-700"} hover:opacity-90`}>
+      <Card key={group.id} className="group flex h-full flex-col overflow-hidden rounded-[2rem] border border-white/70 bg-white/90 shadow-[0_22px_60px_-42px_rgba(15,23,42,0.26)] backdrop-blur-[2px] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_26px_70px_-42px_rgba(15,23,42,0.3)]">
+        <CardHeader className="space-y-4 pb-4">
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <CardTitle className="min-w-0 break-words text-lg leading-7 tracking-[-0.01em] text-slate-900">{group.name}</CardTitle>
+            <Badge className={`w-fit shrink-0 rounded-full ${group.color || "bg-slate-100 text-slate-700"} hover:opacity-90`}>
               {group.membersCount || 0} {t("members")}
             </Badge>
           </div>
-          <CardDescription>
+          <CardDescription className="line-clamp-3 text-sm leading-6 text-slate-600">
             {group.description || t("groupDefaultDescription")}
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="flex flex-col gap-3 sm:flex-row">
+        <CardContent className="mt-auto pt-0">
+          <div className="grid gap-3 sm:grid-cols-2">
             {isMember(group) ? (
               <Button
                 variant="outline"
-                className="w-full rounded-2xl sm:w-auto"
+                className="w-full rounded-2xl"
                 onClick={() => handleLeave(group.id)}
                 disabled={loadingId === group.id}
               >
@@ -150,14 +152,14 @@ export default function GroupsPage() {
               </Button>
             ) : (
               <Button
-                className="w-full rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 shadow-sm shadow-sky-200 transition-all hover:shadow-md hover:scale-[1.02] sm:w-auto"
+                className="w-full rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 shadow-sm shadow-sky-200 transition-all hover:scale-[1.02] hover:shadow-md"
                 onClick={() => handleJoin(group.id)}
                 disabled={loadingId === group.id || !user}
               >
                 {loadingId === group.id ? t("joiningGroup") : t("joinGroup")}
               </Button>
             )}
-            <Link href={`/groups/${group.id}`} className="inline-flex w-full items-center justify-center rounded-2xl border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground sm:w-auto">
+            <Link href={`/groups/${group.id}`} className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 hover:text-slate-900">
               {t("seePosts")}
             </Link>
           </div>
@@ -172,12 +174,27 @@ export default function GroupsPage() {
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-blue-600 shadow-lg shadow-sky-200">
           <Users className="h-6 w-6 text-white" />
         </div>
-        <div>
+        <div className="min-w-0">
           <h1 className="font-display text-2xl font-semibold tracking-tight">{t("groupsTitle")}</h1>
           <p className="mt-1 text-sm text-slate-500">
             {t("groupsDescription")}
           </p>
         </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card className="rounded-[1.75rem] border border-white/70 bg-white/85 shadow-[0_18px_50px_-40px_rgba(15,23,42,0.24)]">
+          <CardContent className="p-5">
+            <div className="text-sm text-slate-500">{t("activeGroups")}</div>
+            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{activeGroups.length}</div>
+          </CardContent>
+        </Card>
+        <Card className="rounded-[1.75rem] border border-white/70 bg-white/85 shadow-[0_18px_50px_-40px_rgba(15,23,42,0.24)]">
+          <CardContent className="p-5">
+            <div className="text-sm text-slate-500">{secondaryLabel}</div>
+            <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{secondaryCount}</div>
+          </CardContent>
+        </Card>
       </div>
 
       {user ? (

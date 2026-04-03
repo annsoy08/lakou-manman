@@ -111,6 +111,8 @@ export default function SpecialtyDoctorPublicPage({
   const deleteDialogMessage = pendingDeleteArticle && pendingDeleteArticle.title
     ? `${deleteArticleConfirmLabel}\n\n${pendingDeleteArticle.title}`
     : deleteArticleConfirmLabel;
+  const questionDisclaimerText = ui.questionDisclaimerText || ui.disclaimerText || "";
+  const importantDisclaimerText = ui.importantDisclaimerText || ui.disclaimerText || "";
 
   useEffect(() => {
     setArticles(defaultArticles);
@@ -679,7 +681,7 @@ export default function SpecialtyDoctorPublicPage({
                       <Send className="mr-2 h-4 w-4" />
                       {sending ? t("sending") + "..." : t("sendQuestion")}
                     </Button>
-                    <p className="text-xs leading-5 text-slate-500">{ui.disclaimerText}</p>
+                    <p className="text-xs leading-5 text-slate-500">{questionDisclaimerText}</p>
                   </form>
                 )}
               </CardContent>
@@ -758,7 +760,7 @@ export default function SpecialtyDoctorPublicPage({
                 <div>
                   <div className="font-semibold">{ui.importantTitle}</div>
                   <div className="mt-1 leading-6">
-                    {ui.disclaimerText}
+                    {importantDisclaimerText}
                   </div>
                 </div>
               </CardContent>

@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   UserPlus,
   Users,
+  Trophy,
   Settings,
   Trash2,
   Check,
@@ -36,6 +37,8 @@ export default function NotificationsPage() {
     switch (type) {
       case "message":
         return <MessageCircle className="h-4 w-4 text-blue-500" />;
+      case "chess":
+        return <Trophy className="h-4 w-4 text-amber-500" />;
       case "request":
         return <UserPlus className="h-4 w-4 text-violet-500" />;
       case "group":

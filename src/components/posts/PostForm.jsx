@@ -11,11 +11,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ImageUpload from "@/components/ui/ImageUpload";
 import VideoUpload from "@/components/ui/VideoUpload";
-import { ImageIcon, PlusCircle, Smile, Video } from "lucide-react";
+import { ChevronDown, ChevronUp, ImageIcon, Lock, PlusCircle, Smile, Video } from "lucide-react";
 
 const emojiOptions = ["❤️", "🙏", "🥰", "😊", "😂", "😭", "😴", "🤱", "👶", "🍼", "🌸", "✨", "😍", "😘", "🤗", "💪", "🙌", "👏", "🤎", "💙", "🎉", "😅", "🥹", "🔥"];
 
-export default function PostForm({ groupId, groupName, onPostCreated }) {
+export default function PostForm({ groupId, groupName, onPostCreated, canPost = true, collapsible = false }) {
   const { user, userProfile } = useAuth();
   const { t, language } = useLanguage();
   const [form, setForm] = useState({
@@ -32,6 +32,7 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
   const [activeMediaType, setActiveMediaType] = useState("images");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [emojiTarget, setEmojiTarget] = useState("body");
+  const [isExpanded, setIsExpanded] = useState(!collapsible);
   const emojiUi = language === "ht"
     ? {
         title: "Emojis nan pòs la",
@@ -50,6 +51,19 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
         publishError: "Une erreur est survenue. Réessayez.",
         anonymousAuthor: "Anonyme",
         groupPostLabel: "Cette publication apparaîtra dans le groupe",
+      };
+  const compactUi = language === "ht"
+    ? {
+        createPost: "Kreye yon nouvo pòs",
+        open: "Louvri",
+        close: "Fèmen",
+        hint: "Pataje yon kestyon oswa yon eksperyans ak kominote a.",
+      }
+    : {
+        createPost: "Créer un nouveau post",
+        open: "Ouvrir",
+        close: "Fermer",
+        hint: "Partagez une question ou une expérience avec la communauté.",
       };
 
   // Reset form when language changes to update placeholders
@@ -75,6 +89,12 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
   async function handleSubmit(e) {
     e.preventDefault();
     if (!user) return;
+
+    if (groupId && !canPost) {
+      setError(t("mustBeGroupMemberToPublish"));
+      return;
+    }
+
     const trimmedTitle = form.title.trim();
     const trimmedBody = form.body.trim();
 
@@ -102,10 +122,19 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
         verified: false,
       });
       setForm({ title: "", body: "", tag: "", isAnonymous: false, images: [], videos: [] });
+      setShowEmojiPicker(false);
+      setActiveMediaType("images");
+      if (collapsible) {
+        setIsExpanded(false);
+      }
       if (onPostCreated) onPostCreated(postId);
     } catch (err) {
       console.error("Create post error:", err);
-      setError(emojiUi.publishError);
+      if (err?.code === "group/member-required" || err?.code === "permission-denied") {
+        setError(t("mustBeGroupMemberToPublish"));
+      } else {
+        setError(emojiUi.publishError);
+      }
     } finally {
       setLoading(false);
     }
@@ -121,11 +150,64 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
     );
   }
 
+  if (groupId && !canPost) {
+    return (
+      <Card className="rounded-[2rem] border border-dashed border-slate-200 bg-white/90">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg text-slate-900">
+            <Lock className="h-5 w-5 text-slate-500" />
+            {t("joinGroupToPost")}
+          </CardTitle>
+          <CardDescription>{t("joinGroupToPostHint")}</CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0 text-sm text-slate-600">
+          {groupName ? `${emojiUi.groupPostLabel} : ${groupName}` : t("joinGroupToPostHint")}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (collapsible && !isExpanded) {
+    return (
+      <Card className="rounded-[2rem] border border-slate-200/80 bg-white/95 shadow-[0_20px_60px_-42px_rgba(15,23,42,0.3)]">
+        <CardContent className="p-3 sm:p-3.5">
+          <button
+            type="button"
+            onClick={() => setIsExpanded(true)}
+            className="flex w-full items-center justify-between gap-2.5 rounded-[1.3rem] border border-slate-200 bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(249,244,247,0.98)_100%)] px-3.5 py-3 text-left transition hover:border-rose-200 hover:bg-rose-50/40"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                <PlusCircle className="h-4 w-4 text-rose-600" />
+                <span>{compactUi.createPost}</span>
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
+                {groupId ? `${emojiUi.groupPostLabel}${groupName ? ` : ${groupName}` : ""}` : compactUi.hint}
+              </p>
+            </div>
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 shadow-sm">
+              {compactUi.open}
+              <ChevronDown className="h-3.5 w-3.5" />
+            </span>
+          </button>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="rounded-[2rem]">
-      <CardHeader>
-        <CardTitle className="text-lg">{t("publishPost")}</CardTitle>
-        <CardDescription>{t("publishPostDesc")}</CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+        <div className="space-y-1.5">
+          <CardTitle className="text-lg">{t("publishPost")}</CardTitle>
+          <CardDescription>{t("publishPostDesc")}</CardDescription>
+        </div>
+        {collapsible ? (
+          <Button type="button" variant="outline" className="rounded-xl" onClick={() => setIsExpanded(false)}>
+            <ChevronUp className="mr-2 h-4 w-4" />
+            {compactUi.close}
+          </Button>
+        ) : null}
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -178,7 +260,7 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
                 </SelectContent>
               </Select>
             ) : null}
-            <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600">
+            <label className="flex w-full items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600 sm:w-auto">
               <input
                 type="checkbox"
                 checked={form.isAnonymous}
@@ -189,11 +271,11 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
             </label>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
               <Button
                 type="button"
                 variant="outline"
-                className="rounded-xl"
+                className="w-full rounded-xl sm:w-auto"
                 onClick={() => setShowEmojiPicker((prev) => !prev)}
               >
                 <Smile className="mr-2 h-4 w-4" />
@@ -220,11 +302,11 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
             ) : null}
           </div>
           <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Button
                 type="button"
                 variant={activeMediaType === "images" ? "default" : "outline"}
-                className="rounded-xl"
+                className="w-full justify-center rounded-xl sm:w-auto"
                 onClick={() => setActiveMediaType("images")}
               >
                 <ImageIcon className="mr-2 h-4 w-4" />
@@ -233,7 +315,7 @@ export default function PostForm({ groupId, groupName, onPostCreated }) {
               <Button
                 type="button"
                 variant={activeMediaType === "videos" ? "default" : "outline"}
-                className="rounded-xl"
+                className="w-full justify-center rounded-xl sm:w-auto"
                 onClick={() => setActiveMediaType("videos")}
               >
                 <Video className="mr-2 h-4 w-4" />

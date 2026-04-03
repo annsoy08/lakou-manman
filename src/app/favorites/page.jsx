@@ -38,7 +38,7 @@ const getConditionLabels = (t) => ({
 
 const conditionColors = {
   new: "bg-emerald-100 text-emerald-700",
-  "like-new": "bg-sky-100 text-sky-700",
+  "like-new": "bg-[#f4ecef] text-[#7E243A]",
   good: "bg-amber-100 text-amber-700",
   used: "bg-slate-100 text-slate-600",
 };
@@ -117,20 +117,20 @@ export default function FavoritesPage() {
       {/* Loading */}
       {loading && (
         <div className="flex justify-center py-12">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#9B2335] border-t-transparent"></div>
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#7E243A] border-t-transparent"></div>
         </div>
       )}
 
       {/* Empty state */}
       {!loading && favorites.length === 0 && (
-        <Card className="rounded-3xl border-0 bg-gradient-to-br from-rose-50 to-pink-50 p-12 text-center">
-          <Heart className="mx-auto h-16 w-16 text-rose-300" />
-          <h2 className="mt-4 text-xl font-semibold text-rose-900">{t("noFavorites")}</h2>
-          <p className="mt-2 text-rose-700">
+        <Card className="rounded-3xl border-0 bg-gradient-to-br from-[#fcf8f9] to-white p-12 text-center shadow-[0_24px_70px_-44px_rgba(108,31,50,0.12)]">
+          <Heart className="mx-auto h-16 w-16 text-[#c993a3]" />
+          <h2 className="mt-4 text-xl font-semibold text-[#6C1F32]">{t("noFavorites")}</h2>
+          <p className="mt-2 text-[#7E243A]">
             {t("noFavoritesDesc")}
           </p>
           <Link href="/boutique" className="mt-4 inline-block">
-            <Button className="rounded-xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C]">
+            <Button className="rounded-xl bg-gradient-to-r from-[#6C1F32] to-[#4B1021] shadow-[0_16px_34px_-18px_rgba(108,31,50,0.38)]">
               <ShoppingBag className="mr-2 h-4 w-4" />
               {t("discoverShop")}
             </Button>
@@ -163,20 +163,20 @@ export default function FavoritesPage() {
                       +{item.images.length - 1}
                     </div>
                   )}
-                  <div className="hidden h-full w-full items-center justify-center bg-gradient-to-br from-rose-50 to-pink-50">
+                  <div className="hidden h-full w-full items-center justify-center bg-gradient-to-br from-white to-[#f6eef1]">
                     <ImageIcon className="h-10 w-10 text-slate-300" />
                   </div>
                 </div>
               ) : (
-                <div className="flex h-48 w-full items-center justify-center bg-gradient-to-br from-rose-50 to-pink-50">
-                  <ShoppingBag className="h-10 w-10 text-rose-200" />
+                <div className="flex h-48 w-full items-center justify-center bg-gradient-to-br from-white via-[#fbf6f7] to-[#f3e7eb]">
+                  <ShoppingBag className="h-10 w-10 text-[#d7b3be]" />
                 </div>
               )}
 
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="font-semibold leading-tight line-clamp-2">{item.title}</h3>
-                  <span className="shrink-0 text-lg font-bold text-[#9B2335]">
+                  <span className="shrink-0 text-lg font-bold text-[#7E243A]">
                     {item.price?.toLocaleString()} HTG
                   </span>
                 </div>
@@ -209,7 +209,7 @@ export default function FavoritesPage() {
                 {item.contact && (
                   <a
                     href={`tel:${item.contact}`}
-                    className="mt-3 flex items-center gap-1.5 text-sm font-medium text-[#9B2335] hover:underline"
+                    className="mt-3 flex items-center gap-1.5 text-sm font-medium text-[#7E243A] hover:underline"
                   >
                     <Phone className="h-3.5 w-3.5" />
                     {item.contact}
@@ -217,14 +217,15 @@ export default function FavoritesPage() {
                 )}
 
                 {/* View item button */}
-                <Link href={`/boutique#${item.id}`}>
-                  <Button
-                    size="sm"
-                    className="mt-3 w-full rounded-xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] text-xs"
-                  >
+                <Button
+                  asChild
+                  size="sm"
+                  className="mt-3 w-full rounded-xl bg-gradient-to-r from-[#6C1F32] to-[#4B1021] text-xs shadow-[0_16px_34px_-18px_rgba(108,31,50,0.38)]"
+                >
+                  <Link href={`/boutique/${item.id}`}>
                     {t("viewDetails")}
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
           ))}

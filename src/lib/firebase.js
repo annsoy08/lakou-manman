@@ -1,19 +1,38 @@
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore, initializeFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore, setLogLevel as setFirestoreLogLevel } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { validateClientEnvironment, getValidatedEnvVar } from "./env-validation";
+
+function isClientDebugLoggingEnabled() {
+  const flag = String(process.env.NEXT_PUBLIC_ENABLE_CLIENT_DEBUG_LOGS || "").trim().toLowerCase();
+  return flag === "true" || flag === "1" || flag === "yes";
+}
+
+if (typeof window !== "undefined") {
+  setFirestoreLogLevel("silent");
+}
+
+if (typeof window !== 'undefined' && !window.__lakouEnvValidated) {
+  const validation = validateClientEnvironment();
+  if (!validation.valid && isClientDebugLoggingEnabled()) {
+    console.warn('⚠️ Environment validation failed:', validation.errors);
+    console.info('💡 To fix: Copy .env.local.example to .env.local and fill in your values');
+  }
+  window.__lakouEnvValidated = true;
+}
 
 function normalizeConfigValue(value = "") {
   return String(value ?? "").trim().replace(/^['"]|['"]$/g, "");
 }
 
 const firebaseConfig = {
-  apiKey: normalizeConfigValue(process.env.NEXT_PUBLIC_FIREBASE_API_KEY),
-  authDomain: normalizeConfigValue(process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN),
-  projectId: normalizeConfigValue(process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID),
-  storageBucket: normalizeConfigValue(process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET),
-  messagingSenderId: normalizeConfigValue(process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID),
-  appId: normalizeConfigValue(process.env.NEXT_PUBLIC_FIREBASE_APP_ID),
+  apiKey: normalizeConfigValue(getValidatedEnvVar('NEXT_PUBLIC_FIREBASE_API_KEY')),
+  authDomain: normalizeConfigValue(getValidatedEnvVar('NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN')),
+  projectId: normalizeConfigValue(getValidatedEnvVar('NEXT_PUBLIC_FIREBASE_PROJECT_ID')),
+  storageBucket: normalizeConfigValue(getValidatedEnvVar('NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET')),
+  messagingSenderId: normalizeConfigValue(getValidatedEnvVar('NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID')),
+  appId: normalizeConfigValue(getValidatedEnvVar('NEXT_PUBLIC_FIREBASE_APP_ID')),
 };
 
 function isPlaceholderValue(value = "") {
@@ -124,9 +143,11 @@ function getFirebaseApp() {
 
   try {
     if (!hasValidFirebaseConfig(firebaseConfig)) {
-      console.warn(
-        `Firebase config is missing or invalid (${getFirebaseConfigIssues(firebaseConfig).join(", ")}). App will run without Firebase services.`
-      );
+      if (isClientDebugLoggingEnabled()) {
+        console.warn(
+          `Firebase config is missing or invalid (${getFirebaseConfigIssues(firebaseConfig).join(", ")}). App will run without Firebase services.`
+        );
+      }
       app = null;
       return app;
     }
@@ -134,7 +155,9 @@ function getFirebaseApp() {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
     return app;
   } catch (error) {
-    console.warn("Firebase app initialization failed, using mock services:", error.message);
+    if (isClientDebugLoggingEnabled()) {
+      console.warn("Firebase app initialization failed, using mock services:", error.message);
+    }
     app = null;
     return app;
   }
@@ -157,7 +180,9 @@ function getFirebaseAuth() {
     auth = getAuth(firebaseApp);
     return auth;
   } catch (error) {
-    console.warn("Firebase auth initialization failed, auth features disabled:", error.message);
+    if (isClientDebugLoggingEnabled()) {
+      console.warn("Firebase auth initialization failed, auth features disabled:", error.message);
+    }
     auth = null;
     return auth;
   }
@@ -189,7 +214,9 @@ function getFirebaseDb() {
       db = getFirestore(firebaseApp);
       return db;
     } catch (fallbackError) {
-      console.warn("Firebase Firestore initialization failed:", fallbackError.message || error.message);
+      if (isClientDebugLoggingEnabled()) {
+        console.warn("Firebase Firestore initialization failed:", fallbackError.message || error.message);
+      }
       db = null;
       return db;
     }
@@ -213,7 +240,9 @@ function getFirebaseStorage() {
     storage = getStorage(firebaseApp);
     return storage;
   } catch (error) {
-    console.warn("Firebase Storage initialization failed:", error.message);
+    if (isClientDebugLoggingEnabled()) {
+      console.warn("Firebase Storage initialization failed:", error.message);
+    }
     storage = null;
     return storage;
   }

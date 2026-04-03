@@ -302,6 +302,11 @@ function normalizeDocumentPath(documentName = "") {
   return markerIndex >= 0 ? documentName.slice(markerIndex + marker.length) : "";
 }
 
+function isFirestoreNotFoundError(error) {
+  const message = String(error?.message || "").trim().toLowerCase();
+  return message.includes("requested entity was not found") || message.includes("firestore_admin_request_failed:404");
+}
+
 function fromFirestoreDocument(document = {}) {
   const documentName = String(document.name || "").trim();
   const documentPath = normalizeDocumentPath(documentName);
@@ -544,6 +549,33 @@ async function patchDocument(documentPath, data = {}) {
     method: "PATCH",
     body: { fields },
   });
+}
+
+export async function getDocumentAsAdmin(documentPath) {
+  const normalizedDocumentPath = String(documentPath || "").trim();
+  if (!normalizedDocumentPath) {
+    return null;
+  }
+
+  try {
+    const document = await firestoreRequest(`/documents/${normalizedDocumentPath}`);
+    return document ? fromFirestoreDocument(document) : null;
+  } catch (error) {
+    if (isFirestoreNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function patchDocumentAsAdmin(documentPath, data = {}) {
+  const normalizedDocumentPath = String(documentPath || "").trim();
+  if (!normalizedDocumentPath) {
+    return null;
+  }
+
+  await patchDocument(normalizedDocumentPath, data);
+  return getDocumentAsAdmin(normalizedDocumentPath);
 }
 
 export async function updateShopOrderByTransactionIdAsAdmin(transactionId, data = {}) {

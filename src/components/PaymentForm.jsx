@@ -61,7 +61,7 @@ Stati: Peye ak siksè
 ====================================
 Lakou Manman S.A.
 Pòtoprens, Ayiti
-contact@lakou-manman.com
+contact@lakoumanman.com
 +509 32589391
 
 Mèsi pou konfyans ou !
@@ -83,7 +83,7 @@ Statut: Payé avec succès
 ====================================
 Lakou Manman S.A.
 Port-au-Prince, Haïti
-contact@lakou-manman.com
+contact@lakoumanman.com
 +509 32589391
 
 Merci pour votre confiance !
@@ -188,7 +188,7 @@ Merci pour votre confiance !
     <div class="company-info">
         <strong>Lakou Manman S.A.</strong><br>
         ${currentLang === 'ht' ? 'Pòtoprens, Ayiti' : 'Port-au-Prince, Haïti'}<br>
-        contact@lakou-manman.com<br>
+        contact@lakoumanman.com<br>
         +509 32589391
     </div>
     
@@ -318,7 +318,7 @@ Merci pour votre confiance !
     <div class="company-info">
         <strong>Lakou Manman S.A.</strong><br>
         ${currentLang === 'ht' ? 'Pòtoprens, Ayiti' : 'Port-au-Prince, Haïti'}<br>
-        contact@lakou-manman.com<br>
+        contact@lakoumanman.com<br>
         +509 32589391
     </div>
     
@@ -381,7 +381,7 @@ Stati: Peye ak siksè
 ====================================
 Lakou Manman S.A.
 Pòtoprens, Ayiti
-contact@lakou-manman.com
+contact@lakoumanman.com
 +509 32589391
 
 Mèsi pou konfyans ou !
@@ -403,7 +403,7 @@ Statut: Payé avec succès
 ====================================
 Lakou Manman S.A.
 Port-au-Prince, Haïti
-contact@lakou-manman.com
+contact@lakoumanman.com
 +509 32589391
 
 Merci pour votre confiance !

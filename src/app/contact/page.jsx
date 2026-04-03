@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +11,15 @@ import { Mail, Phone, MapPin, Send } from "lucide-react";
 
 export default function ContactPage() {
   const { t, language } = useLanguage();
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    subject: "",
+    message: "",
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitMessage, setSubmitMessage] = useState("");
+  const [submitError, setSubmitError] = useState("");
 
   const content = language === "ht"
     ? {
@@ -36,7 +46,13 @@ export default function ContactPage() {
           { label: "Politik konfidansyalite", href: "/privacy" }
         ],
         directContactTitle: "Kontak dirèk",
-        directContactDescription: "Ou ka itilize lyen sa yo pou voye imèl, rele oswa jwenn adrès la pi vit."
+        directContactDescription: "Ou ka itilize lyen sa yo pou voye imèl, rele oswa jwenn adrès la pi vit.",
+        missingFields: "Tanpri ranpli non ou, imèl ou, sijè a ak mesaj la.",
+        invalidEmail: "Tanpri antre yon imèl ki valab.",
+        sendingLabel: "Voye an pwogrè...",
+        successMessage: "Mesaj ou a voye avèk siksè. N ap reponn ou byento.",
+        genericError: "Nou pa t ka voye mesaj la kounye a. Tanpri eseye ankò pita.",
+        configurationError: "Sèvis mesaj la poko konfigire sou sèvè a."
       }
     : {
         title: "Nous contacter",
@@ -62,8 +78,97 @@ export default function ContactPage() {
           { label: "Politique de confidentialité", href: "/privacy" }
         ],
         directContactTitle: "Contact direct",
-        directContactDescription: "Vous pouvez utiliser ces liens pour envoyer un email, appeler ou ouvrir l'adresse plus rapidement."
+        directContactDescription: "Vous pouvez utiliser ces liens pour envoyer un email, appeler ou ouvrir l'adresse plus rapidement.",
+        missingFields: "Veuillez renseigner votre nom, votre email, le sujet et le message.",
+        invalidEmail: "Veuillez entrer une adresse email valide.",
+        sendingLabel: "Envoi en cours...",
+        successMessage: "Votre message a bien été envoyé. Nous vous répondrons rapidement.",
+        genericError: "Nous n'avons pas pu envoyer votre message pour le moment. Merci de réessayer plus tard.",
+        configurationError: "Le service de contact n'est pas encore configuré sur le serveur."
       };
+
+  function isValidEmail(emailValue) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue);
+  }
+
+  function handleFieldChange(fieldName, fieldValue) {
+    setFormData((currentFormData) => ({
+      ...currentFormData,
+      [fieldName]: fieldValue,
+    }));
+
+    if (submitError) {
+      setSubmitError("");
+    }
+
+    if (submitMessage) {
+      setSubmitMessage("");
+    }
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+
+    const trimmedFormData = {
+      name: formData.name.trim(),
+      email: formData.email.trim(),
+      subject: formData.subject.trim(),
+      message: formData.message.trim(),
+    };
+
+    if (!trimmedFormData.name || !trimmedFormData.email || !trimmedFormData.subject || !trimmedFormData.message) {
+      setSubmitMessage("");
+      setSubmitError(content.missingFields);
+      return;
+    }
+
+    if (!isValidEmail(trimmedFormData.email)) {
+      setSubmitMessage("");
+      setSubmitError(content.invalidEmail);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError("");
+    setSubmitMessage("");
+
+    try {
+      const response = await fetch("/api/contact", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(trimmedFormData),
+      });
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        if (result?.error === "service_unconfigured") {
+          setSubmitError(content.configurationError);
+        } else if (result?.error === "validation_error") {
+          setSubmitError(result?.message || content.missingFields);
+        } else if (result?.error === "send_failed") {
+          setSubmitError(result?.message || content.genericError);
+        } else {
+          setSubmitError(content.genericError);
+        }
+        return;
+      }
+
+      setFormData({
+        name: "",
+        email: "",
+        subject: "",
+        message: "",
+      });
+      setSubmitMessage(content.successMessage);
+    } catch {
+      setSubmitError(content.genericError);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 to-purple-50 p-4">
@@ -86,38 +191,65 @@ export default function ContactPage() {
                 {content.formTitle}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  {t("yourName") || "Votre nom"}
-                </label>
-                <Input placeholder={t("namePlaceholder") || "Entrez votre nom"} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  {t("yourEmail") || "Votre email"}
-                </label>
-                <Input type="email" placeholder={t("emailPlaceholder") || "votre@email.com"} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  {content.subjectLabel}
-                </label>
-                <Input placeholder={content.subjectPlaceholder} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  {t("message") || "Message"}
-                </label>
-                <Textarea 
-                  placeholder={content.messagePlaceholder}
-                  rows={4}
-                />
-              </div>
-              <Button className="w-full">
-                <Send className="h-4 w-4 mr-2" />
-                {content.sendLabel}
-              </Button>
+            <CardContent>
+              <form className="space-y-4" onSubmit={handleSubmit}>
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    {t("yourName") || "Votre nom"}
+                  </label>
+                  <Input
+                    value={formData.name}
+                    onChange={(event) => handleFieldChange("name", event.target.value)}
+                    placeholder={t("namePlaceholder") || "Entrez votre nom"}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    {t("yourEmail") || "Votre email"}
+                  </label>
+                  <Input
+                    type="email"
+                    value={formData.email}
+                    onChange={(event) => handleFieldChange("email", event.target.value)}
+                    placeholder={t("emailPlaceholder") || "votre@email.com"}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    {content.subjectLabel}
+                  </label>
+                  <Input
+                    value={formData.subject}
+                    onChange={(event) => handleFieldChange("subject", event.target.value)}
+                    placeholder={content.subjectPlaceholder}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    {t("message") || "Message"}
+                  </label>
+                  <Textarea
+                    value={formData.message}
+                    onChange={(event) => handleFieldChange("message", event.target.value)}
+                    placeholder={content.messagePlaceholder}
+                    rows={4}
+                    required
+                  />
+                </div>
+                {submitError ? (
+                  <p className="text-sm text-red-600">{submitError}</p>
+                ) : null}
+                {submitMessage ? (
+                  <p className="text-sm text-slate-600">{submitMessage}</p>
+                ) : null}
+                <Button type="submit" className="w-full" disabled={isSubmitting}>
+                  <Send className="h-4 w-4 mr-2" />
+                  {isSubmitting ? content.sendingLabel : content.sendLabel}
+                </Button>
+              </form>
             </CardContent>
           </Card>
 
@@ -126,13 +258,13 @@ export default function ContactPage() {
               <CardTitle>{content.contactDetailsTitle}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <a href="mailto:contact@lakou-manman.com" className="flex items-center gap-3 rounded-xl transition hover:bg-slate-50 p-2 -m-2">
+              <a href="mailto:contact@lakoumanman.com" className="flex items-center gap-3 rounded-xl transition hover:bg-slate-50 p-2 -m-2">
                 <div className="w-10 h-10 bg-pink-100 rounded-full flex items-center justify-center">
                   <Mail className="h-5 w-5 text-pink-600" />
                 </div>
                 <div>
                   <div className="font-medium">{content.emailLabel}</div>
-                  <div className="text-slate-600">contact@lakou-manman.com</div>
+                  <div className="text-slate-600">contact@lakoumanman.com</div>
                 </div>
               </a>
 

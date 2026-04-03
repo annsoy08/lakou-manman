@@ -1,3 +1,130 @@
+export function getPediatrePageConfig(language, t) {
+  const isHt = language === "ht";
+
+  return {
+    theme: {
+      pageClassName: "min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-white p-4",
+      avatarFallbackClassName: "bg-gradient-to-br from-emerald-400 to-cyan-500 text-2xl text-white",
+      heroBadgeClassName: "mb-3 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-4 py-1.5 text-sm font-medium text-emerald-700",
+      metaIconClassName: "h-4 w-4 text-emerald-600",
+      primaryButtonClassName: "bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600",
+      fullPrimaryButtonClassName: "w-full bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600",
+      quickActionPrimaryButtonClassName: "w-full bg-emerald-600 hover:bg-emerald-700",
+      selectedProfileCardClassName: "rounded-xl border border-emerald-300 bg-emerald-50 p-4 shadow-sm transition-all",
+      unselectedProfileCardClassName: "rounded-xl border border-slate-200 bg-white p-4 transition-all",
+      featuredBadgeClassName: "bg-emerald-100 text-emerald-700 hover:bg-emerald-100",
+      sectionIconClassName: "h-5 w-5 text-emerald-600",
+      videoEmptyStateClassName: "rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 p-6 text-sm text-slate-600",
+      videoCardPreviewClassName: "flex h-32 items-center justify-center bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-500 transition-transform group-hover:scale-[1.02]",
+      articleIconWrapperClassName: "flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-100 to-cyan-100",
+      successMessageClassName: "rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700",
+      infoAccentTextClassName: "font-medium text-emerald-700",
+    },
+    ui: {
+      initialsFallback: "PED",
+      heroBadge: isHt ? "Pedyatri" : "Pédiatrie",
+      heroTitle: isHt ? "Espas pedyatri Lakou Manman" : "Espace pédiatrie Lakou Manman",
+      heroDescription: isHt
+        ? "Jwenn pwofil pedyat ki pibliye yo, videyo itil yo, ak konsèy ki ede w pran bon desizyon pou tibebe ak timoun yo."
+        : "Retrouvez les profils de pédiatres publiés, leurs vidéos utiles, et des conseils qui aident les familles à prendre les bons repères pour les bébés et les enfants.",
+      selectedProfileLabel: isHt ? "Pedyat chwazi a" : "Pédiatre sélectionné",
+      themesTitle: isHt ? "Sijè ki pi souvan poze kestyon" : "Questions fréquentes en pédiatrie",
+      firstStepsTitle: isHt ? "Premye repè yo" : "Premiers repères",
+      topics: isHt
+        ? [
+            "Lafyèv, tous, dyare ak siy dezidratasyon",
+            "Alimantasyon tibebe ak kestyon sou kwasans",
+            "Dòmi, devlopman ak kestyon sou konpòtman timoun yo",
+            "Siy alèt ki mande yon swen rapid",
+          ]
+        : [
+            "Fièvre, toux, diarrhée et signes de déshydratation",
+            "Alimentation du bébé et questions de croissance",
+            "Sommeil, développement et comportement de l'enfant",
+            "Signes d'alerte qui demandent une prise en charge rapide",
+          ],
+      firstSteps: isHt
+        ? [
+            "Obsève sentòm yo ak depi kilè yo te kòmanse",
+            "Veye sou lafyèv, respirasyon ak nivo enèji timoun nan",
+            "Chèche yon konsèy pwofesyonèl si gen dout oswa siy gravite",
+            "Pa ret tann si timoun nan parèt twò fèb oswa li pa bwè ditou",
+          ]
+        : [
+            "Observer les symptômes et depuis quand ils ont commencé",
+            "Surveiller la fièvre, la respiration et l'énergie de l'enfant",
+            "Demander un avis professionnel en cas de doute ou de signe de gravité",
+            "Ne pas attendre si l'enfant devient très faible ou refuse de boire",
+          ],
+      profileListTitle: isHt ? "Pedyat ki disponib yo" : "Pédiatres disponibles",
+      profileListDescription: isHt
+        ? "Chwazi pwofil pedyat ou vle mete an avan sou paj la."
+        : "Choisissez le profil pédiatre que vous souhaitez mettre en avant sur la page.",
+      profileFallbackTitle: isHt ? "Espas pedyatri a ap pare" : "L'espace pédiatrie se prépare",
+      profileFallbackDescription: isHt
+        ? "Nou ap mete pwofil pedyat verifye yo disponib sou espas sa a."
+        : "Nous mettons progressivement à disposition les profils pédiatres vérifiés dans cet espace.",
+      allLocations: isHt ? "Tout kote yo" : "Tous les lieux",
+      selectedCard: isHt ? "Pwofil chwazi a" : "Profil sélectionné",
+      chooseCard: isHt ? "Chwazi pwofil sa a" : "Choisir ce profil",
+      featuredVideosTitle: isHt ? "Videyo pou gade" : "Vidéos à regarder",
+      featuredVideosDescription: isHt
+        ? "Videyo prezantasyon ak sansibilizasyon pedyat yo pataje pou fanmi yo."
+        : "Vidéos de présentation et de sensibilisation partagées pour les familles.",
+      noVideos: isHt ? "Pa gen videyo disponib pou kounye a." : "Aucune vidéo n'est disponible pour le moment.",
+      resourcesTitle: isHt ? "Atik ak resous pedyatrik" : "Articles et ressources pédiatriques",
+      resourcesDescription: isHt
+        ? "Konsèy verifye sou kestyon ki tounen souvan lakay paran yo."
+        : "Des conseils validés sur les questions qui reviennent souvent chez les parents.",
+      emptyArticles: isHt ? "Atik pedyatrik yo ap disponib byento." : "Les articles pédiatriques seront disponibles bientôt.",
+      contactTitle: isHt ? "Poze yon kesyon" : "Poser une question",
+      contactDescription: isHt
+        ? "Voye kestyon ou a bay ekip medikal la. Repons yo pa ranplase yon swen ijans."
+        : "Envoyez votre question à l'équipe médicale. Les réponses ne remplacent pas une prise en charge d'urgence.",
+      questionDisclaimerText: t("emergencyNote"),
+      importantDisclaimerText: t("medicalDisclaimer"),
+      disclaimerText: t("medicalDisclaimer"),
+      quickActionsTitle: isHt ? "Aksyon rapid" : "Actions rapides",
+      infoCardTitle: isHt ? "Enfòmasyon sou pwofil la" : "Informations sur le profil",
+      infoCardDescription: isHt
+        ? "Sa itil pou konnen kijan pwofil la ka ede w pi vit."
+        : "L'essentiel pour savoir comment ce profil peut vous aider rapidement.",
+      publicProfile: isHt ? "Pwofil piblik" : "Profil public",
+      available: isHt ? "Wi" : "Oui",
+      unavailable: isHt ? "Non" : "Non",
+      videoLabel: isHt ? "Videyo" : "Vidéo",
+      bookLabel: isHt ? "Pran randevou" : "Prendre rendez-vous",
+      languagesLabel: isHt ? "Lang" : "Langues",
+      experienceLabel: isHt ? "Eksperyans" : "Expérience",
+      watchVideoLabel: isHt ? "Gade videyo a" : "Voir la vidéo",
+      requestAppointment: isHt ? "Mande yon randevou" : "Demander un rendez-vous",
+      askTeam: isHt ? "Poze kestyon ou" : "Poser votre question",
+      openDashboard: isHt ? "Louvri dashboard medsen an" : "Ouvrir le dashboard médecin",
+      importantTitle: isHt ? "Enpòtan" : "Important",
+    },
+    defaultArticles: [
+      {
+        id: "1",
+        title: t("tipFeverTitle"),
+        text: t("tipFeverText"),
+        validated: true,
+      },
+      {
+        id: "2",
+        title: t("tipDehydrationTitle"),
+        text: t("tipDehydrationText"),
+        validated: true,
+      },
+      {
+        id: "3",
+        title: t("tipEmergencyTitle"),
+        text: t("tipEmergencyText"),
+        validated: true,
+      },
+    ],
+  };
+}
+
 export function getGynecologyPageConfig(language, t) {
   const isHt = language === "ht";
 

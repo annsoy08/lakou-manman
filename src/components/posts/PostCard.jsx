@@ -11,7 +11,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import ActionDialog from "@/components/ui/action-dialog";
 import { getInitials, formatDate } from "@/lib/utils";
-import { toggleLike, savePost, addComment, getComments, reportPost, createConversationRequest } from "@/lib/firestore";
+import { toggleLike, savePost, addComment, getComments, reportPost, createConversation, setGroupPostPinned } from "@/lib/firestore";
 import {
   Heart,
   MessageCircle,
@@ -20,12 +20,13 @@ import {
   Flag,
   ChevronDown,
   ChevronUp,
+  Pin,
   Smile,
 } from "lucide-react";
 
 const COMMENT_EMOJI_OPTIONS = ["❤️", "🙏", "🥰", "😊", "😂", "😭", "😍", "😘", "🤗", "✨", "🌸", "🔥", "👏", "🙌", "💙", "🤎", "🫶", "🥹"];
 
-export default function PostCard({ post, comments: initialComments = [], onUpdate }) {
+export default function PostCard({ post, comments: initialComments = [], canPin = false, onUpdate }) {
   const { user, userProfile } = useAuth();
   const { t, language } = useLanguage();
   const router = useRouter();
@@ -39,6 +40,7 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
   const [newComment, setNewComment] = useState("");
   const [showCommentEmojiPicker, setShowCommentEmojiPicker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [pinning, setPinning] = useState(false);
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
   const [dialogState, setDialogState] = useState({
     open: false,
@@ -69,6 +71,29 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
         groupLabel: "Groupe",
         loadingComments: "Chargement des commentaires...",
       };
+
+  async function handleTogglePin() {
+    if (!user?.uid || !canPin || !post?.groupId) {
+      return;
+    }
+
+    setPinning(true);
+    try {
+      await setGroupPostPinned(post.id, user.uid, !post.pinned);
+      onUpdate?.();
+    } catch (error) {
+      console.error("Pin post error:", error);
+      setDialogState({
+        open: true,
+        tone: "error",
+        title: postDialogUi.groupLabel,
+        message: t("pinPostError"),
+      });
+    } finally {
+      setPinning(false);
+    }
+  }
+
   const isAnonymousPost = Boolean(post.isAnonymous);
   const authorDisplayName = isAnonymousPost ? t("anonymous") : post.authorName;
   const authorDisplayPhoto = isAnonymousPost ? "" : post.authorPhoto;
@@ -110,18 +135,10 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
   async function handleMessageUser() {
     if (!user || user.uid === post.authorId) return;
     try {
-      const result = await createConversationRequest({
-        fromUserId: user.uid,
-        toUserId: post.authorId,
-      });
-
-      if (result.status === "existing_conversation") {
-        router.push(`/messages?conversationId=${result.conversationId}`);
-      } else {
-        router.push("/messages");
-      }
+      const conversationId = await createConversation([user.uid, post.authorId]);
+      router.push(`/messages?conversationId=${conversationId}`);
     } catch (e) {
-      console.error("Error requesting conversation:", e);
+      console.error("Error opening conversation:", e);
       setDialogState({
         open: true,
         tone: "error",
@@ -224,11 +241,11 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
   }
 
   return (
-    <Card className="rounded-[1.5rem] border-0 shadow-sm transition-all hover:shadow-md">
-      <CardContent className="p-6">
+    <Card className="overflow-hidden rounded-[1.8rem] border border-slate-200/80 bg-white/95 shadow-[0_20px_55px_-40px_rgba(15,23,42,0.35)] transition-all duration-300 hover:shadow-[0_28px_65px_-42px_rgba(15,23,42,0.42)]">
+      <CardContent className="p-4 sm:p-5 lg:p-6">
         {/* Author info */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+          <div className="min-w-0 w-full flex items-center gap-3">
             <Avatar className="h-10 w-10 ring-2 ring-rose-100">
               {authorDisplayPhoto && (
                 <AvatarImage 
@@ -250,47 +267,54 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
               ) : (
                 <button
                   onClick={() => router.push(`/profile/${post.authorId}`)}
-                  className="font-medium text-slate-900 hover:text-rose-600 transition-colors"
+                  className="truncate text-left font-semibold tracking-[-0.015em] text-slate-900 transition-colors hover:text-rose-600"
                 >
                   {authorDisplayName}
                 </button>
               )}
-              <div className="text-xs text-slate-500">
+              <div className="mt-0.5 text-[11px] uppercase tracking-[0.14em] text-slate-400">
                 {formatDate(post.createdAt, language)}
               </div>
               {authorMeta ? (
-                <div className="mt-0.5 text-xs text-slate-500">
+                <div className="mt-1 break-words text-xs leading-5 text-slate-500">
                   {authorMeta}
                 </div>
               ) : null}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {post.tag && (
-              <Badge variant="secondary" className="rounded-full bg-rose-50 text-rose-600">
-                {(() => {
-                  return post.tag === 'tagFeeding' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
-                         post.tag === 'tagSleep' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
-                         post.tag === 'tagPostpartum' ? 'Post-partum' :
-                         post.tag === 'tagCreole' ? (language === 'fr' ? 'Mères dans la diaspora' : 'Manman nan diaspora') :
-                         post.tag === 'tagWorkKids' ? (language === 'fr' ? 'Travail et enfants' : 'Travay ak timoun') :
-                         post.tag === 'tagHealth' ? (language === 'fr' ? 'Santé' : 'Lasante') :
-                         post.tag === 'tagEducation' ? (language === 'fr' ? 'Éducation' : 'Edikasyon') :
-                         post.tag === 'tagCommunity' ? (language === 'fr' ? 'Communauté' : 'Kominote') :
-                         // Fallback for incorrect data
-                         post.tag === 'sommeil' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
-                         post.tag === 'alimentation' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
-                         post.tag === 'Sommeil' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
-                         post.tag === 'Alimentation' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
-                         post.tag === 'Dòmi' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
-                         post.tag === 'Alimantasyon' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
-                         post.tag;
-                })()}
-              </Badge>
-            )}
+          <div className="flex w-full items-start justify-between gap-2 sm:w-auto sm:shrink-0 sm:justify-start sm:self-start">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {post.pinned ? (
+                <Badge variant="secondary" className="rounded-full border border-amber-100 bg-amber-50/90 px-3 py-1 text-[11px] font-medium leading-4 text-amber-700">
+                  <Pin className="mr-1 h-3 w-3" />
+                  {t("pinnedInGroup")}
+                </Badge>
+              ) : null}
+              {post.tag && (
+                <Badge variant="secondary" className="max-w-[calc(100%-3.25rem)] whitespace-normal break-words rounded-full border border-rose-100 bg-rose-50/90 px-3 py-1 text-[11px] font-medium leading-4 text-rose-600 sm:max-w-none">
+                  {(() => {
+                    return post.tag === 'tagFeeding' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
+                           post.tag === 'tagSleep' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
+                           post.tag === 'tagPostpartum' ? 'Post-partum' :
+                           post.tag === 'tagCreole' ? (language === 'fr' ? 'Mères dans la diaspora' : 'Manman nan diaspora') :
+                           post.tag === 'tagWorkKids' ? (language === 'fr' ? 'Travail et enfants' : 'Travay ak timoun') :
+                           post.tag === 'tagHealth' ? (language === 'fr' ? 'Santé' : 'Lasante') :
+                           post.tag === 'tagEducation' ? (language === 'fr' ? 'Éducation' : 'Edikasyon') :
+                           post.tag === 'tagCommunity' ? (language === 'fr' ? 'Communauté' : 'Kominote') :
+                           post.tag === 'sommeil' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
+                           post.tag === 'alimentation' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
+                           post.tag === 'Sommeil' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
+                           post.tag === 'Alimentation' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
+                           post.tag === 'Dòmi' ? (language === 'fr' ? 'Sommeil bébé' : 'Dòmi tibebe') :
+                           post.tag === 'Alimantasyon' ? (language === 'fr' ? 'Alimentation' : 'Alimantasyon') :
+                           post.tag;
+                  })()}
+                </Badge>
+              )}
+            </div>
             <button
               onClick={handleSave}
-              className="rounded-full bg-slate-50 p-2 transition-all hover:bg-rose-50 hover:scale-110"
+              className="shrink-0 rounded-full border border-slate-200/80 bg-white p-2.5 shadow-sm transition-all hover:border-rose-100 hover:bg-rose-50 hover:scale-[1.04]"
             >
               <Bookmark className={`h-4 w-4 ${saved ? "fill-current text-rose-500" : ""}`} />
             </button>
@@ -298,18 +322,22 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
         </div>
 
         {/* Post content */}
-        <h3 className="mt-4 text-lg font-semibold tracking-tight">
-          {language === 'ht' ? 
-            post.title.replace(/sommeil/gi, 'dòmi').replace(/alimentation/gi, 'alimantasyon') : 
-            post.title}
-        </h3>
-        <p className="mt-2 text-sm leading-7 text-slate-500">
-          {language === 'ht' ? 
-            post.body.replace(/sommeil/gi, 'dòmi').replace(/alimentation/gi, 'alimantasyon') : 
-            post.body}
-        </p>
+        <div className="mt-5 space-y-3">
+          {post.title ? (
+            <h3 className="font-display break-words text-[1.12rem] font-semibold leading-[1.22] tracking-[-0.03em] text-slate-900 sm:text-[1.24rem]">
+              {language === 'ht' ? 
+                post.title.replace(/sommeil/gi, 'dòmi').replace(/alimentation/gi, 'alimantasyon') : 
+                post.title}
+            </h3>
+          ) : null}
+          <p className="break-words text-[0.95rem] leading-7 text-slate-600 sm:text-[0.98rem]">
+            {language === 'ht' ? 
+              post.body.replace(/sommeil/gi, 'dòmi').replace(/alimentation/gi, 'alimantasyon') : 
+              post.body}
+          </p>
+        </div>
         {postImages.length > 0 && (
-          <div className={`mt-4 grid gap-3 ${postImages.length === 1 ? "grid-cols-1" : "sm:grid-cols-2"}`}>
+          <div className={`mt-5 grid gap-3 ${postImages.length === 1 ? "grid-cols-1" : "sm:grid-cols-2"}`}>
             {postImages.map((image, index) => {
               const imageUrl = typeof image === "string" ? image : image?.url;
               const imageName = typeof image === "string" ? `Post image ${index + 1}` : image?.name || `Post image ${index + 1}`;
@@ -324,7 +352,7 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
                   href={imageUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="overflow-hidden rounded-2xl bg-slate-100"
+                  className="overflow-hidden rounded-[1.35rem] border border-slate-100 bg-slate-100"
                 >
                   <img
                     src={imageUrl}
@@ -337,7 +365,7 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
           </div>
         )}
         {postVideos.length > 0 && (
-          <div className="mt-4 grid gap-3">
+          <div className="mt-5 grid gap-3">
             {postVideos.map((video, index) => {
               const videoUrl = typeof video === "string" ? video : video?.url;
               const videoName = typeof video === "string" ? `Post video ${index + 1}` : video?.name || `Post video ${index + 1}`;
@@ -347,7 +375,7 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
               }
 
               return (
-                <div key={`${post.id}-video-${index}`} className="overflow-hidden rounded-2xl bg-slate-100">
+                <div key={`${post.id}-video-${index}`} className="overflow-hidden rounded-[1.35rem] border border-slate-100 bg-slate-100">
                   <video
                     src={videoUrl}
                     controls
@@ -363,18 +391,18 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
         )}
 
         {/* Actions */}
-        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
+        <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-slate-100/90 pt-4 text-sm text-slate-500">
           <button
             onClick={handleLike}
-            className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition-all ${
-              liked ? "bg-rose-100 text-rose-600 shadow-sm" : "bg-rose-50/70 hover:bg-rose-100 hover:shadow-sm"
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition-all sm:px-3.5 sm:text-sm ${
+              liked ? "border-rose-100 bg-rose-100 text-rose-600 shadow-sm" : "border-rose-100/60 bg-rose-50/70 hover:bg-rose-100 hover:shadow-sm"
             }`}
           >
             <Heart className={`h-4 w-4 transition-transform ${liked ? "fill-current scale-110" : "hover:scale-110"}`} /> {likesCount}
           </button>
           <button
             onClick={handleToggleComments}
-            className="inline-flex items-center gap-1.5 rounded-full bg-slate-50/70 px-3.5 py-1.5 transition-all hover:bg-slate-100 hover:shadow-sm"
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/70 bg-slate-50/70 px-3 py-2 text-xs font-medium transition-all hover:bg-slate-100 hover:shadow-sm sm:px-3.5 sm:text-sm"
           >
             <MessageCircle className="h-4 w-4" /> {post.commentsCount || comments.length}
             {showComments ? (
@@ -385,14 +413,14 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
           </button>
           <button
             onClick={handleWhatsAppShare}
-            className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3.5 py-1.5 text-green-700 transition-all hover:bg-green-100 hover:shadow-sm"
+            className="inline-flex items-center gap-1.5 rounded-full border border-green-100 bg-green-50 px-3 py-2 text-xs font-medium text-green-700 transition-all hover:bg-green-100 hover:shadow-sm sm:px-3.5 sm:text-sm"
           >
             <Send className="h-4 w-4" /> {t("whatsapp")}
           </button>
           {user && user.uid !== post.authorId && (
             <button
               onClick={handleMessageUser}
-              className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] text-white px-3.5 py-1.5 transition-all hover:shadow-sm"
+              className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] px-3 py-2 text-xs font-medium text-white shadow-[0_16px_30px_-22px_rgba(123,26,44,0.8)] transition-all hover:shadow-sm sm:px-3.5 sm:text-sm"
             >
               <MessageCircle className="h-4 w-4" /> {t("messageUser")}
             </button>
@@ -400,18 +428,28 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
           {user && (
             <button
               onClick={handleReport}
-              className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-3 py-1.5 hover:bg-slate-100"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200/70 bg-slate-50 px-3 py-2 text-xs transition hover:bg-slate-100 sm:text-sm"
             >
               <Flag className="h-4 w-4" /> <span className="hidden sm:inline">{t("report")}</span>
             </button>
           )}
+          {canPin && post.groupId ? (
+            <button
+              onClick={handleTogglePin}
+              disabled={pinning}
+              className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm"
+            >
+              <Pin className="h-4 w-4" />
+              <span>{post.pinned ? t("unpinPost") : t("pinPost")}</span>
+            </button>
+          ) : null}
         </div>
 
         {/* Comments section */}
         {showComments && (
-          <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
+          <div className="mt-5 space-y-3 border-t border-slate-100 pt-5">
             {commentsLoading ? (
-              <div className="rounded-xl bg-slate-50/80 px-4 py-3 text-sm text-slate-500">
+              <div className="rounded-[1.1rem] border border-slate-100 bg-slate-50/80 px-4 py-3 text-sm text-slate-500">
                 {postDialogUi.loadingComments}
               </div>
             ) : null}
@@ -422,14 +460,14 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
                     {getInitials(comment.authorName)}
                   </AvatarFallback>
                 </Avatar>
-                <div className="flex-1 rounded-xl bg-slate-50/80 p-3">
+                <div className="flex-1 rounded-[1.1rem] border border-slate-100 bg-slate-50/80 p-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{comment.authorName}</span>
+                    <span className="break-words text-sm font-medium">{comment.authorName}</span>
                     <span className="text-xs text-slate-400">
                       {formatDate(comment.createdAt, language)}
                     </span>
                   </div>
-                  <p className="mt-1 text-sm text-slate-600">{comment.content}</p>
+                  <p className="mt-1 break-words text-sm text-slate-600">{comment.content}</p>
                 </div>
               </div>
             ))}
@@ -441,14 +479,14 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
                     value={newComment}
                     onChange={(e) => setNewComment(e.target.value)}
                     placeholder={t("writeComment")}
-                    className="min-h-[84px] flex-1 rounded-xl text-base"
+                    className="min-h-[84px] flex-1 rounded-[1.1rem] border-slate-200 bg-white/90 text-[0.95rem]"
                   />
                   <div className="flex flex-col gap-2">
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="rounded-xl"
+                      className="rounded-[1rem]"
                       onClick={() => setShowCommentEmojiPicker((current) => !current)}
                     >
                       <Smile className="h-4 w-4" />
@@ -457,14 +495,14 @@ export default function PostCard({ post, comments: initialComments = [], onUpdat
                       type="submit"
                       size="sm"
                       disabled={submitting || !newComment.trim()}
-                      className="rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 shadow-sm"
+                      className="rounded-[1rem] bg-gradient-to-r from-rose-500 to-pink-600 shadow-sm"
                     >
                       <Send className="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
                 {showCommentEmojiPicker ? (
-                  <div className="flex flex-wrap gap-2 rounded-xl bg-slate-50 p-3">
+                  <div className="flex flex-wrap gap-2 rounded-[1.1rem] border border-slate-100 bg-slate-50 p-3">
                     {COMMENT_EMOJI_OPTIONS.map((emoji) => (
                       <button
                         key={emoji}

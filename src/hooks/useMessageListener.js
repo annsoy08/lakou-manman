@@ -63,6 +63,8 @@ export function useMessageListener() {
 
     if (!user || !isBrowserOnline || listenerPaused) return;
 
+    let effectCancelled = false;
+
     const pauseListeners = () => {
       unsubscribeFunctions.current.forEach((unsub) => unsub());
       unsubscribeFunctions.current = [];
@@ -89,65 +91,79 @@ export function useMessageListener() {
       }
     };
 
-    // Listen for new messages in conversations
-    const unsubscribeConversations = subscribeToUserConversations(
-      user.uid,
-      (conversations) => {
-        const nextUnreadCounts = new Map();
-
-        conversations.forEach((conversation) => {
-          const unreadCount = Number(conversation?.unreadCount?.[user.uid] || 0);
-          const previousUnreadCount = Number(unreadCountsRef.current.get(conversation.id) || 0);
-          nextUnreadCounts.set(conversation.id, unreadCount);
-
-          if (!hasLoadedInitialSnapshotRef.current) {
-            return;
-          }
-
-          if (unreadCount <= previousUnreadCount) {
-            return;
-          }
-
-          if (!conversation.lastMessage || conversation.lastMessageSenderId === user.uid) {
-            return;
-          }
-
-          markMessagesAsDelivered(conversation.id, user.uid).catch(() => {});
-
-          if (pathnameRef.current !== "/messages") {
-            const senderName = [
-              conversation.lastMessageSenderName,
-              conversation.participantNames?.[conversation.lastMessageSenderId],
-            ].find((value) => typeof value === "string" && value.trim()) || "Quelqu'un";
-
-            notifyMessage(
-              senderName,
-              conversation.lastMessage || "Vous a envoyé un message",
-              conversation.id
-            );
-          }
-        });
-
-        unreadCountsRef.current = nextUnreadCounts;
-        hasLoadedInitialSnapshotRef.current = true;
-      },
-      (error) => {
-        trackError(error, {
-          scope: "message_listener_conversations_snapshot",
-          uid: user.uid,
-        });
-        pauseListeners();
+    const startConversationsListener = async () => {
+      try {
+        if (typeof user.getIdToken === "function") {
+          await user.getIdToken();
+        }
+      } catch (_tokenError) {
+        // proceed anyway - Firestore SDK will retry when connection is ready
       }
-    );
 
-    unsubscribeFunctions.current.push(unsubscribeConversations);
+      if (effectCancelled) return;
+
+      // Listen for new messages in conversations
+      const unsubscribeConversations = subscribeToUserConversations(
+        user.uid,
+        (conversations) => {
+          const nextUnreadCounts = new Map();
+
+          conversations.forEach((conversation) => {
+            const unreadCount = Number(conversation?.unreadCount?.[user.uid] || 0);
+            const previousUnreadCount = Number(unreadCountsRef.current.get(conversation.id) || 0);
+            nextUnreadCounts.set(conversation.id, unreadCount);
+
+            if (!hasLoadedInitialSnapshotRef.current) {
+              return;
+            }
+
+            if (unreadCount <= previousUnreadCount) {
+              return;
+            }
+
+            if (!conversation.lastMessage || conversation.lastMessageSenderId === user.uid) {
+              return;
+            }
+
+            markMessagesAsDelivered(conversation.id, user.uid).catch(() => {});
+
+            if (pathnameRef.current !== "/messages") {
+              const senderName = [
+                conversation.lastMessageSenderName,
+                conversation.participantNames?.[conversation.lastMessageSenderId],
+              ].find((value) => typeof value === "string" && value.trim()) || "Quelqu'un";
+
+              notifyMessage(
+                senderName,
+                conversation.lastMessage || "Vous a envoyé un message",
+                conversation.id
+              );
+            }
+          });
+
+          unreadCountsRef.current = nextUnreadCounts;
+          hasLoadedInitialSnapshotRef.current = true;
+        },
+        (error) => {
+          trackError(error, {
+            scope: "message_listener_conversations_snapshot",
+            uid: user.uid,
+          });
+          pauseListeners();
+        }
+      );
+
+      unsubscribeFunctions.current.push(unsubscribeConversations);
+    };
+
+    startConversationsListener();
 
     return () => {
+      effectCancelled = true;
       if (retryTimeoutRef.current && typeof window !== "undefined") {
         window.clearTimeout(retryTimeoutRef.current);
         retryTimeoutRef.current = null;
       }
-      unsubscribeConversations();
       unsubscribeFunctions.current.forEach((unsub) => unsub());
       unsubscribeFunctions.current = [];
     };

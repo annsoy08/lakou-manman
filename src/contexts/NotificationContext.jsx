@@ -4,10 +4,71 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, u
 import { useAuth } from "./AuthContext";
 import { useLanguage } from "./LanguageContext";
 import { requestNotificationPermission, getFCMToken, onMessageListener, showNotification } from "../lib/messaging";
-import { saveUserFcmToken } from "../lib/firestore";
+import {
+  clearUserNotifications,
+  deleteUserNotification,
+  markAllUserNotificationsAsRead,
+  markUserNotificationAsRead,
+  saveUserFcmToken,
+  subscribeToUserNotifications,
+} from "../lib/firestore";
 import { logTechnicalEvent, trackError } from "@/lib/telemetry";
 
 const NotificationContext = createContext();
+
+function normalizeNotificationTimestamp(value) {
+  if (!value) {
+    return new Date(0);
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value.toDate();
+  }
+
+  const parsedDate = new Date(value);
+  return Number.isNaN(parsedDate.getTime()) ? new Date(0) : parsedDate;
+}
+
+function mergeNotificationsByIdentity(...notificationLists) {
+  const mergedNotifications = [];
+  const seenIds = new Set();
+  const seenDedupeKeys = new Set();
+
+  notificationLists.forEach((notificationList) => {
+    (Array.isArray(notificationList) ? notificationList : []).forEach((notification) => {
+      if (!notification || typeof notification !== "object") {
+        return;
+      }
+
+      const notificationId = String(notification.id || "").trim();
+      const dedupeKey = String(notification.dedupeKey || "").trim();
+
+      if (notificationId && seenIds.has(notificationId)) {
+        return;
+      }
+
+      if (dedupeKey && seenDedupeKeys.has(dedupeKey)) {
+        return;
+      }
+
+      if (notificationId) {
+        seenIds.add(notificationId);
+      }
+
+      if (dedupeKey) {
+        seenDedupeKeys.add(dedupeKey);
+      }
+
+      mergedNotifications.push(notification);
+    });
+  });
+
+  return mergedNotifications.sort((left, right) => normalizeNotificationTimestamp(right?.timestamp) - normalizeNotificationTimestamp(left?.timestamp));
+}
 
 function getNotificationData(notification = {}) {
   return notification?.data && typeof notification.data === "object"
@@ -122,6 +183,26 @@ function relocalizeNotification(notification, notificationText) {
     };
   }
 
+  if (notification.type === "chess") {
+    const senderName = String(rawData.senderName || "").trim();
+    const gameId = String(rawData.gameId || "").trim();
+    if (!senderName) {
+      return notification;
+    }
+
+    return {
+      ...notification,
+      title: `${notificationText.chessInviteTitle} ${senderName}`,
+      message: notificationText.chessInviteMessage,
+      link: gameId ? `/games#chess-game` : (notification.link || "/games#chess-game"),
+      data: {
+        ...rawData,
+        gameId,
+        senderName,
+      },
+    };
+  }
+
   if (notification.type === "favorite") {
     const itemTitle = String(rawData.itemTitle || "").trim();
     const userName = String(rawData.userName || "").trim();
@@ -222,6 +303,13 @@ function buildForegroundNotificationDedupeKey(payload = {}, notificationType = "
     }
   }
 
+  if (notificationType === "chess") {
+    const gameId = String(data.gameId || "").trim();
+    if (gameId) {
+      return `chess:${gameId}`;
+    }
+  }
+
   if (notificationType === "message") {
     const conversationId = String(data.conversationId || "").trim();
     const preview = String(data.preview || notificationBody || "").trim();
@@ -244,6 +332,8 @@ export function NotificationProvider({ children }) {
   const { language } = useLanguage();
   const [notifications, setNotifications] = useState([]);
   const notificationsRef = useRef([]);
+  const hasLoadedPersistedNotificationsRef = useRef(false);
+  const knownRemoteNotificationIdsRef = useRef(new Set());
   const notificationText = useMemo(() => (language === "ht"
     ? {
         newMessageFrom: "Nouvo mesaj de",
@@ -253,6 +343,8 @@ export function NotificationProvider({ children }) {
         newItem: "Nouvo atik",
         publishedBy: "Pibliye pa",
         conversationRequestMessage: "vle voye mesaj pou ou",
+        chessInviteTitle: "Envitasyon jwèt echèk soti nan",
+        chessInviteMessage: "envite ou pou jwe yon pati echèk sou Lakou Manman",
         newGroupPostIn: "Nouvo pòs nan",
         publishedInGroup: "fèk pibliye nan gwoup la",
         groupPostFallbackTitle: "Nouvo piblikasyon pou gwoup ou a",
@@ -267,6 +359,8 @@ export function NotificationProvider({ children }) {
         newItem: "Nouvel article",
         publishedBy: "Publié par",
         conversationRequestMessage: "souhaite vous envoyer un message",
+        chessInviteTitle: "Invitation aux échecs de",
+        chessInviteMessage: "vous invite à jouer une partie d'échecs sur Lakou Manman",
         newGroupPostIn: "Nouveau post dans",
         publishedInGroup: "vient de publier dans le groupe",
         groupPostFallbackTitle: "Nouvelle publication dans votre groupe",
@@ -312,6 +406,8 @@ export function NotificationProvider({ children }) {
         const localizedNotification = relocalizeNotification(notification, notificationText);
         return {
           ...localizedNotification,
+          source: localizedNotification?.source || "local",
+          timestamp: normalizeNotificationTimestamp(localizedNotification?.timestamp),
           toastVisible: false,
         };
       });
@@ -329,6 +425,7 @@ export function NotificationProvider({ children }) {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: new Date(),
       read: false,
+      source: "local",
       toastVisible: localizedNotification.autoRemove !== false,
       ...localizedNotification,
     };
@@ -345,8 +442,20 @@ export function NotificationProvider({ children }) {
   }, []);
 
   const removeNotification = useCallback((id) => {
+    const notificationToRemove = notificationsRef.current.find((notification) => notification.id === id);
+
+    if (notificationToRemove?.source === "firestore" && currentUserId) {
+      deleteUserNotification(currentUserId, id).catch((error) => {
+        trackError(error, {
+          scope: "notifications_delete_remote",
+          uid: currentUserId,
+          notificationId: id,
+        });
+      });
+    }
+
     setNotifications(prev => prev.filter(n => n.id !== id));
-  }, []);
+  }, [currentUserId]);
 
   const dismissToast = useCallback((id) => {
     setNotifications(prev =>
@@ -359,18 +468,52 @@ export function NotificationProvider({ children }) {
   }, []);
 
   const markAsRead = useCallback((id) => {
+    const notificationToMark = notificationsRef.current.find((notification) => notification.id === id);
+
+    if (notificationToMark?.source === "firestore" && currentUserId && !notificationToMark.read) {
+      markUserNotificationAsRead(currentUserId, id).catch((error) => {
+        trackError(error, {
+          scope: "notifications_mark_read_remote",
+          uid: currentUserId,
+          notificationId: id,
+        });
+      });
+    }
+
     setNotifications(prev =>
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
-  }, []);
+  }, [currentUserId]);
 
   const markAllAsRead = useCallback(() => {
+    const hasRemoteUnreadNotifications = notificationsRef.current.some((notification) => notification.source === "firestore" && !notification.read);
+
+    if (hasRemoteUnreadNotifications && currentUserId) {
+      markAllUserNotificationsAsRead(currentUserId).catch((error) => {
+        trackError(error, {
+          scope: "notifications_mark_all_read_remote",
+          uid: currentUserId,
+        });
+      });
+    }
+
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  }, []);
+  }, [currentUserId]);
 
   const clearAll = useCallback(() => {
+    const hasRemoteNotifications = notificationsRef.current.some((notification) => notification.source === "firestore");
+
+    if (hasRemoteNotifications && currentUserId) {
+      clearUserNotifications(currentUserId).catch((error) => {
+        trackError(error, {
+          scope: "notifications_clear_remote",
+          uid: currentUserId,
+        });
+      });
+    }
+
     setNotifications([]);
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => {
     setNotifications((prev) => {
@@ -523,11 +666,80 @@ export function NotificationProvider({ children }) {
   useEffect(() => {
     if (!currentUserId) {
       setNotifications([]);
+      hasLoadedPersistedNotificationsRef.current = false;
+      knownRemoteNotificationIdsRef.current = new Set();
       return;
     }
 
     let isActive = true;
     let unsubscribeForegroundMessages = () => {};
+    let unsubscribeRemoteNotifications = () => {};
+
+    const handleRemoteNotifications = (remoteNotifications) => {
+      if (!isActive) {
+        return;
+      }
+      const mappedRemoteNotifications = (Array.isArray(remoteNotifications) ? remoteNotifications : []).map((notification) => {
+        const localizedNotification = localizeNotificationForCurrentLanguage({
+          ...notification,
+          source: "firestore",
+          timestamp: normalizeNotificationTimestamp(notification?.timestamp || notification?.createdAt),
+          toastVisible: false,
+        }, notificationTextRef.current);
+
+        return {
+          ...localizedNotification,
+          source: "firestore",
+          timestamp: normalizeNotificationTimestamp(localizedNotification?.timestamp || notification?.timestamp || notification?.createdAt),
+          toastVisible: false,
+        };
+      });
+
+      const nextRemoteIds = new Set(mappedRemoteNotifications.map((notification) => notification.id).filter(Boolean));
+
+      if (hasLoadedPersistedNotificationsRef.current) {
+        mappedRemoteNotifications.forEach((notification) => {
+          const alreadyKnownById = notification.id && knownRemoteNotificationIdsRef.current.has(notification.id);
+          const alreadyKnownByDedupeKey = notification.dedupeKey
+            && notificationsRef.current.some((existingNotification) => existingNotification.dedupeKey === notification.dedupeKey);
+
+          if (!alreadyKnownById && !alreadyKnownByDedupeKey) {
+            setNotifications((prev) => prev.map((existingNotification) => (
+              existingNotification.dedupeKey && existingNotification.dedupeKey === notification.dedupeKey
+                ? { ...existingNotification, toastVisible: false }
+                : existingNotification
+            )));
+
+            if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+              showNotification(notification.title, notification.message);
+            }
+          }
+        });
+      }
+
+      knownRemoteNotificationIdsRef.current = nextRemoteIds;
+      hasLoadedPersistedNotificationsRef.current = true;
+
+      setNotifications((prev) => mergeNotificationsByIdentity(
+        mappedRemoteNotifications,
+        prev.filter((notification) => notification.source !== "firestore")
+      ));
+    };
+
+    unsubscribeRemoteNotifications = subscribeToUserNotifications(
+      currentUserId,
+      handleRemoteNotifications,
+      (error) => {
+        if (!isActive) {
+          return;
+        }
+
+        trackError(error, {
+          scope: "notifications_remote_listener",
+          uid: currentUserId,
+        });
+      }
+    );
 
     const initNotifications = async () => {
       try {
@@ -611,9 +823,12 @@ export function NotificationProvider({ children }) {
         const savedNotifications = window.localStorage.getItem(`notifications_${currentUserId}`);
         if (savedNotifications) {
           const parsed = JSON.parse(savedNotifications);
-          setNotifications(normalizeStoredNotifications(parsed));
+          setNotifications((prev) => mergeNotificationsByIdentity(
+            prev.filter((notification) => notification.source === "firestore"),
+            normalizeStoredNotifications(parsed)
+          ));
         } else {
-          setNotifications([]);
+          setNotifications((prev) => prev.filter((notification) => notification.source === "firestore"));
         }
       } catch (error) {
         console.error("Error parsing notifications:", error);
@@ -621,13 +836,14 @@ export function NotificationProvider({ children }) {
           scope: "notifications_parse_local_storage",
           uid: currentUserId,
         });
-        setNotifications([]);
+        setNotifications((prev) => prev.filter((notification) => notification.source === "firestore"));
       }
     }
 
     return () => {
       isActive = false;
       unsubscribeForegroundMessages();
+      unsubscribeRemoteNotifications();
     };
   }, [addNotification, currentUserId]);
 
@@ -636,7 +852,7 @@ export function NotificationProvider({ children }) {
     if (typeof window !== "undefined" && currentUserId) {
       try {
         window.localStorage.setItem(`notifications_${currentUserId}`, JSON.stringify({
-          notifications: notifications.slice(0, 50), // Keep only last 50
+          notifications: notifications.filter((notification) => notification.source !== "firestore").slice(0, 50),
           unreadCount,
         }));
       } catch (e) {

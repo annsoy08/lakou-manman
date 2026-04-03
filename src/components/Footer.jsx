@@ -80,15 +80,15 @@ export default function Footer() {
             <div className="space-y-3">
               <div className="flex items-center gap-3 text-slate-300">
                 <Mail className="h-5 w-5 text-pink-400" />
-                <span>contact@lakou-manman.com</span>
+                <a href="mailto:contact@lakoumanman.com" className="transition hover:text-pink-300">contact@lakoumanman.com</a>
               </div>
               <div className="flex items-center gap-3 text-slate-300">
                 <Phone className="h-5 w-5 text-pink-400" />
-                <span>+509 XXX XXX XX</span>
+                <a href="tel:+50932589391" className="transition hover:text-pink-300">+509 32 58 93 91</a>
               </div>
               <div className="flex items-center gap-3 text-slate-300">
                 <MapPin className="h-5 w-5 text-pink-400" />
-                <span>Port-au-Prince, Haïti</span>
+                <a href="https://www.google.com/maps/search/?api=1&query=Petion-ville%2C+Ha%C3%AFti" target="_blank" rel="noreferrer" className="transition hover:text-pink-300">Petion-ville, Haïti</a>
               </div>
             </div>
 

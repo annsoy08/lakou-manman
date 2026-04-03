@@ -132,6 +132,19 @@ function createAuthError(code, message) {
   return error;
 }
 
+function isExpectedLoginError(error) {
+  const code = String((error && error.code) || "").toLowerCase();
+
+  return (
+    code === "auth/invalid-credential"
+    || code === "auth/wrong-password"
+    || code === "auth/user-not-found"
+    || code === "auth/invalid-email"
+    || code === "auth/missing-password"
+    || code === "auth/missing-email"
+  );
+}
+
 function isTransientFirebaseNetworkError(error) {
   const code = String((error && error.code) || "").toLowerCase();
   const message = String((error && error.message) || "").toLowerCase();
@@ -147,6 +160,21 @@ function isTransientFirebaseNetworkError(error) {
     || message.includes("could not reach cloud firestore backend")
     || message.includes("client is offline")
   );
+}
+
+function isClientDebugLoggingEnabled() {
+  const flag = String(process.env.NEXT_PUBLIC_ENABLE_CLIENT_DEBUG_LOGS || "").trim().toLowerCase();
+  return flag === "true" || flag === "1" || flag === "yes";
+}
+
+function shouldLogClientError(error) {
+  return isClientDebugLoggingEnabled() || !isTransientFirebaseNetworkError(error);
+}
+
+async function ensureFirebaseUserToken(firebaseUser) {
+  if (firebaseUser && typeof firebaseUser.getIdToken === "function") {
+    await firebaseUser.getIdToken();
+  }
 }
 
 export function AuthProvider({ children }) {
@@ -248,6 +276,12 @@ export function AuthProvider({ children }) {
     }
 
     try {
+      const auth = resolveAuth();
+      const authUser = auth?.currentUser;
+      if (authUser && authUser.uid === uid) {
+        await ensureFirebaseUserToken(authUser);
+      }
+
       await updateUserPresence(uid, { isOnline });
       lastPresenceSyncRef.current = {
         uid,
@@ -257,15 +291,19 @@ export function AuthProvider({ children }) {
     } catch (error) {
       if (isTransientFirebaseNetworkError(error)) {
         schedulePresenceRetryWindow(uid, isOnline, error);
-        logTechnicalEvent("auth_sync_presence_deferred", {
-          uid,
-          isOnline,
-          code: String((error && error.code) || ""),
-        });
+        if (isClientDebugLoggingEnabled()) {
+          logTechnicalEvent("auth_sync_presence_deferred", {
+            uid,
+            isOnline,
+            code: String((error && error.code) || ""),
+          });
+        }
         return;
       }
 
-      console.error("Error updating user presence:", error);
+      if (shouldLogClientError(error)) {
+        console.error("Error updating user presence:", error);
+      }
       trackError(error, {
         scope: "auth_sync_presence",
         uid,
@@ -278,7 +316,9 @@ export function AuthProvider({ children }) {
       const auth = getFirebaseAuth();
       return auth;
     } catch (error) {
-      console.error("Firebase auth unavailable:", error);
+      if (shouldLogClientError(error)) {
+        console.error("Firebase auth unavailable:", error);
+      }
       trackError(error, { scope: "auth_resolve_auth" });
       return null;
     }
@@ -334,7 +374,9 @@ export function AuthProvider({ children }) {
       try {
         await updateUserProfile(firebaseUser.uid, ensuredProfile);
       } catch (error) {
-        console.error("Error ensuring user profile integrity:", error);
+        if (shouldLogClientError(error)) {
+          console.error("Error ensuring user profile integrity:", error);
+        }
       }
     }
 
@@ -394,7 +436,9 @@ export function AuthProvider({ children }) {
           return fallbackProfile;
         }
 
-        console.error("Error hydrating user profile:", error);
+        if (shouldLogClientError(error)) {
+          console.error("Error hydrating user profile:", error);
+        }
         trackError(error, {
           scope: "auth_hydrate_profile",
           uid: firebaseUser.uid,
@@ -461,7 +505,9 @@ export function AuthProvider({ children }) {
       const auth = resolveAuth();
 
       if (!auth) {
-        console.warn("Firebase auth not available, using mock auth");
+        if (isClientDebugLoggingEnabled()) {
+          console.warn("Firebase auth not available, using mock auth");
+        }
         logTechnicalEvent("auth_unavailable", { online: canUseNetwork() });
         setLoading(false);
         return;
@@ -509,8 +555,6 @@ export function AuthProvider({ children }) {
             syncPresence(currentUid, false);
           }
 
-          setUser(firebaseUser);
-
           if (firebaseUser) {
             currentUid = firebaseUser.uid;
             resetPresenceBackoff();
@@ -521,6 +565,8 @@ export function AuthProvider({ children }) {
             });
 
             try {
+              await ensureFirebaseUserToken(firebaseUser);
+              setUser(firebaseUser);
               await hydrateAuthenticatedUserProfile(firebaseUser, { preferCache: true });
               const shouldAppearOnline = document.visibilityState === "visible"
                 && (typeof document.hasFocus !== "function" || document.hasFocus());
@@ -537,7 +583,9 @@ export function AuthProvider({ children }) {
                 cachedBootstrapProfile || userProfile
               );
 
-              console.error("Error bootstrapping authenticated profile:", error);
+              if (shouldLogClientError(error)) {
+                console.error("Error bootstrapping authenticated profile:", error);
+              }
               trackError(error, {
                 scope: "auth_bootstrap_profile",
                 uid: firebaseUser.uid,
@@ -545,6 +593,7 @@ export function AuthProvider({ children }) {
               });
 
               if (fallbackBootstrapProfile && fallbackBootstrapProfile.email && fallbackBootstrapProfile.name) {
+                setUser(firebaseUser);
                 setUserProfile(fallbackBootstrapProfile);
                 persistCachedUserProfile(firebaseUser.uid, fallbackBootstrapProfile);
                 persistAdminAccessOverride(
@@ -576,7 +625,9 @@ export function AuthProvider({ children }) {
               try {
                 await signOut(auth);
               } catch (signOutError) {
-                console.error("Error signing out after auth bootstrap failure:", signOutError);
+                if (shouldLogClientError(signOutError)) {
+                  console.error("Error signing out after auth bootstrap failure:", signOutError);
+                }
                 trackError(signOutError, {
                   scope: "auth_bootstrap_profile_signout",
                   uid: firebaseUser.uid,
@@ -597,7 +648,9 @@ export function AuthProvider({ children }) {
             setAdminAccessOverride(false);
           }
         } catch (error) {
-          console.error("Error handling auth state change:", error);
+          if (shouldLogClientError(error)) {
+            console.error("Error handling auth state change:", error);
+          }
           trackError(error, {
             scope: "auth_state_change_handler",
             uid: (firebaseUser && firebaseUser.uid) || currentUid || "",
@@ -630,7 +683,9 @@ export function AuthProvider({ children }) {
 
           await syncPresence(currentUid, shouldAppearOnline);
         } catch (error) {
-          console.error("Error syncing visibility presence:", error);
+          if (shouldLogClientError(error)) {
+            console.error("Error syncing visibility presence:", error);
+          }
         }
       };
 
@@ -643,7 +698,9 @@ export function AuthProvider({ children }) {
           startPresenceHeartbeat();
           await syncPresence(currentUid, true);
         } catch (error) {
-          console.error("Error syncing focused presence:", error);
+          if (shouldLogClientError(error)) {
+            console.error("Error syncing focused presence:", error);
+          }
         }
       };
 
@@ -660,7 +717,9 @@ export function AuthProvider({ children }) {
           clearPresenceHeartbeat();
           await syncPresence(currentUid, false);
         } catch (error) {
-          console.error("Error syncing blurred presence:", error);
+          if (shouldLogClientError(error)) {
+            console.error("Error syncing blurred presence:", error);
+          }
         }
       };
 
@@ -681,7 +740,9 @@ export function AuthProvider({ children }) {
             }
           }
         } catch (error) {
-          console.error("Error syncing online presence:", error);
+          if (shouldLogClientError(error)) {
+            console.error("Error syncing online presence:", error);
+          }
           trackError(error, {
             scope: "auth_window_online",
             uid: currentUid,
@@ -726,7 +787,9 @@ export function AuthProvider({ children }) {
         unsubscribe();
       };
     } catch (error) {
-      console.error("Auth setup failed:", error);
+      if (shouldLogClientError(error)) {
+        console.error("Auth setup failed:", error);
+      }
       trackError(error, { scope: "auth_setup_failed" });
       setLoading(false);
     }
@@ -776,7 +839,9 @@ export function AuthProvider({ children }) {
 
       return cred.user;
     } catch (error) {
-      console.error("Error registering user:", error);
+      if (shouldLogClientError(error)) {
+        console.error("Error registering user:", error);
+      }
       trackError(error, {
         scope: "auth_register",
         email: normalizeEmail(email),
@@ -804,11 +869,21 @@ export function AuthProvider({ children }) {
 
       return cred.user;
     } catch (error) {
-      console.error("Error logging in:", error);
-      trackError(error, {
-        scope: "auth_login",
-        email: normalizeEmail(email),
-      });
+      if (isExpectedLoginError(error)) {
+        logTechnicalEvent("auth_login_rejected", {
+          code: String((error && error.code) || ""),
+          email: normalizeEmail(email),
+        });
+      } else {
+        if (shouldLogClientError(error)) {
+          console.error("Error logging in:", error);
+        }
+        trackError(error, {
+          scope: "auth_login",
+          email: normalizeEmail(email),
+        });
+      }
+
       throw error;
     }
   }
@@ -835,15 +910,18 @@ export function AuthProvider({ children }) {
       return cred.user;
     } catch (error) {
       if ((error && error.code) === "auth/popup-closed-by-user") {
-        console.info("Google sign-in popup closed before completion.");
         logTechnicalEvent("auth_google_signin_cancelled", {
           code: String((error && error.code) || ""),
         });
       } else if ((error && error.code) === "auth/operation-not-allowed") {
-        console.warn("Google sign-in provider is not enabled in Firebase Authentication.");
+        if (isClientDebugLoggingEnabled()) {
+          console.warn("Google sign-in provider is not enabled in Firebase Authentication.");
+        }
         trackError(error, { scope: "auth_google_signin" });
       } else {
-        console.error("Error signing in with Google:", error);
+        if (shouldLogClientError(error)) {
+          console.error("Error signing in with Google:", error);
+        }
         trackError(error, { scope: "auth_google_signin" });
       }
       throw error;
@@ -868,7 +946,9 @@ export function AuthProvider({ children }) {
       setUser(null);
       setUserProfile(null);
     } catch (error) {
-      console.error("Error logging out:", error);
+      if (shouldLogClientError(error)) {
+        console.error("Error logging out:", error);
+      }
       trackError(error, { scope: "auth_logout" });
       throw error;
     }
@@ -884,7 +964,9 @@ export function AuthProvider({ children }) {
     try {
       await sendPasswordResetEmail(auth, email);
     } catch (error) {
-      console.error("Error resetting password:", error);
+      if (shouldLogClientError(error)) {
+        console.error("Error resetting password:", error);
+      }
       trackError(error, {
         scope: "auth_reset_password",
         email: normalizeEmail(email),
@@ -916,7 +998,9 @@ export function AuthProvider({ children }) {
         const effectiveProfile = await hydrateAuthenticatedUserProfile(user);
         return effectiveProfile;
       } catch (error) {
-        console.error("Error refreshing profile:", error);
+        if (shouldLogClientError(error)) {
+          console.error("Error refreshing profile:", error);
+        }
         trackError(error, {
           scope: "auth_refresh_profile",
           uid: user.uid,

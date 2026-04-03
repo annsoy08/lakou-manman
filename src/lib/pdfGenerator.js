@@ -22,7 +22,7 @@ export function generatePaymentPDF(paymentData, language = 'fr') {
       customerInfo: "Informations client",
       companyName: "Lakou Manman S.A.",
       companyAddress: "Port-au-Prince, Haïti",
-      companyEmail: "contact@lakou-manman.com",
+      companyEmail: "contact@lakoumanman.com",
       companyPhone: "+509 32 58 93 91",
       thankYou: "Merci pour votre confiance !",
       footerNote: "Ce reçu est généré automatiquement et valide comme preuve de paiement."
@@ -42,7 +42,7 @@ export function generatePaymentPDF(paymentData, language = 'fr') {
       customerInfo: "Enfòmasyon kliyan",
       companyName: "Lakou Manman S.A.",
       companyAddress: "Pòtoprens, Ayiti",
-      companyEmail: "contact@lakou-manman.com",
+      companyEmail: "contact@lakoumanman.com",
       companyPhone: "+509 32 58 93 91",
       thankYou: "Mèsi pou konfyans ou !",
       footerNote: "Resi sa a jenere otomatikman ak valid kòm prèv payman."

@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getInitials, resolveProfilePhoto, resolveUserDisplayName } from "@/lib/utils";
-import { User, Save, Camera, MapPin, Baby, FileText } from "lucide-react";
+import { User, Save, Camera, MapPin, Baby } from "lucide-react";
 
 export default function ProfilePage() {
   const { user, userProfile, loading: authLoading, refreshProfile } = useAuth();
@@ -35,6 +35,7 @@ export default function ProfilePage() {
     country: "",
     childAges: "",
     bio: "",
+    groupPostEmailNotifications: true,
   });
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -54,6 +55,7 @@ export default function ProfilePage() {
         country: userProfile.country || "",
         childAges: userProfile.childAges || "",
         bio: userProfile.bio || "",
+        groupPostEmailNotifications: userProfile.groupPostEmailNotifications !== false,
       });
     }
     if (userProfile?.photo || user?.photoURL) {
@@ -258,6 +260,24 @@ export default function ProfilePage() {
                   placeholder={t("bioPlaceholder")}
                   className="min-h-[100px] rounded-xl"
                 />
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                <div className="flex items-start gap-3">
+                  <input
+                    id="groupPostEmailNotifications"
+                    type="checkbox"
+                    checked={Boolean(form.groupPostEmailNotifications)}
+                    onChange={(e) => updateField("groupPostEmailNotifications", e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                  />
+                  <div className="space-y-1">
+                    <Label htmlFor="groupPostEmailNotifications" className="text-sm font-medium text-slate-900">
+                      {t("groupPostEmailNotificationsLabel")}
+                    </Label>
+                    <p className="text-sm leading-6 text-slate-500">{t("groupPostEmailNotificationsHint")}</p>
+                  </div>
+                </div>
               </div>
 
               <Button type="submit" className="rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 shadow-sm shadow-rose-200 transition-all hover:shadow-md hover:shadow-rose-300" disabled={saving}>

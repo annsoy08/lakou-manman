@@ -39,6 +39,7 @@ export default function AppShell({ children }) {
     userProfile,
     authLoading,
   });
+  const authRouteHeaderClassName = "border-b border-rose-100 bg-white/95 backdrop-blur";
 
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
@@ -58,7 +59,7 @@ export default function AppShell({ children }) {
   if (isAuthRoute) {
     return (
       <>
-        <div className="border-b border-rose-100 bg-white/95 backdrop-blur">
+        <div className={authRouteHeaderClassName}>
           <div className="app-shell-container flex justify-end py-3">
             <AppErrorBoundary fallback={null}>
               <LanguageSelector />

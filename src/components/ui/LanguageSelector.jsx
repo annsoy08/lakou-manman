@@ -22,12 +22,12 @@ export default function LanguageSelector() {
         variant="ghost"
         size="sm"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 rounded-xl hover:bg-slate-100"
+        className="flex items-center gap-1.5 rounded-xl px-2 py-2 hover:bg-slate-100 sm:gap-2 sm:px-3"
       >
         <Globe className="h-4 w-4" />
-        <span className="hidden sm:inline">{currentLanguage.flag}</span>
-        <span className="hidden sm:inline">{currentLanguage.name}</span>
-        <span className="sm:hidden">{currentLanguage.flag}</span>
+        <span className="text-xs font-medium uppercase sm:text-sm">{currentLanguage.code}</span>
+        <span className="hidden md:inline">{currentLanguage.flag}</span>
+        <span className="hidden lg:inline">{currentLanguage.name}</span>
       </Button>
 
       {isOpen && (

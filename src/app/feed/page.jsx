@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { getPosts, getDiscoverableUsers, getGroups, searchShopItems } from "@/lib/firestore";
+import { getPostsPage, getDiscoverableUsers, getGroups, searchShopItems } from "@/lib/firestore";
 import PostCard from "@/components/posts/PostCard";
 import PostForm from "@/components/posts/PostForm";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -17,7 +17,6 @@ import { getInitials, resolveProfilePhoto } from "@/lib/utils";
 import {
   Search,
   MessageCircle,
-  Filter,
   Users,
   ShoppingBag,
   UserRound,
@@ -101,11 +100,109 @@ function getMemberLocationLabel(member = {}) {
   return member.city || member.country || "Diaspora";
 }
 
+function getMemberRecommendationReason(discoveryUi, member = {}, userProfile = {}) {
+  const userCity = String(userProfile.city || "").trim().toLowerCase();
+  const memberCity = String(member.city || "").trim().toLowerCase();
+  if (userCity && memberCity && userCity === memberCity) {
+    return discoveryUi.sameCityReason;
+  }
+
+  const userCountry = String(userProfile.country || "").trim().toLowerCase();
+  const memberCountry = String(member.country || "").trim().toLowerCase();
+  if (userCountry && memberCountry && userCountry === memberCountry) {
+    return discoveryUi.sameCountryReason;
+  }
+
+  const userChildAges = String(userProfile.childAges || "").trim().toLowerCase();
+  const memberChildAges = String(member.childAges || "").trim().toLowerCase();
+  if (
+    userChildAges &&
+    memberChildAges &&
+    (userChildAges === memberChildAges ||
+      userChildAges.includes(memberChildAges) ||
+      memberChildAges.includes(userChildAges))
+  ) {
+    return discoveryUi.sameStageReason;
+  }
+
+  const userBioTokens = String(userProfile.bio || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length > 4);
+  const memberBio = String(member.bio || "").toLowerCase();
+  if (userBioTokens.length > 0 && memberBio && userBioTokens.some((token) => memberBio.includes(token))) {
+    return discoveryUi.sharedInterestReason;
+  }
+
+  return discoveryUi.communityReason;
+}
+
+function SpotlightMemberCard({ discoveryUi, member, onClick, t, compact = false }) {
+  const memberPhoto = resolveProfilePhoto(
+    member.photo,
+    member.photoURL,
+    member.photoUpdatedAt || member.updatedAt
+  );
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${compact ? "w-full max-w-none" : "w-[250px]"} card-hover group ${compact ? "" : "shrink-0"} rounded-[1.6rem] border border-rose-100/80 bg-gradient-to-br from-white via-white to-rose-50/80 p-4 text-left shadow-[0_18px_50px_-32px_rgba(190,24,93,0.24)]`}
+    >
+      <div className="flex items-start gap-3">
+        <Avatar className="h-14 w-14 ring-2 ring-rose-100">
+          {memberPhoto && <AvatarImage src={memberPhoto} />}
+          <AvatarFallback className="bg-gradient-to-br from-rose-400 to-pink-500 text-white">
+            {getInitials(member.name || t("user"))}
+          </AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          {member.recommendationReason ? (
+            <div className="mb-2 inline-flex max-w-full rounded-full border border-slate-200/80 bg-white/90 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+              {member.recommendationReason}
+            </div>
+          ) : null}
+          <div className="truncate text-[1.02rem] font-semibold tracking-[-0.02em] text-slate-900">
+            {member.name || t("user")}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            {getMemberLocationLabel(member)}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Badge variant="secondary" className="rounded-full bg-rose-50 text-rose-700">
+              {discoveryUi.premiumSelection}
+            </Badge>
+            {member.childAges ? (
+              <Badge variant="secondary" className="rounded-full bg-white text-slate-600">
+                {member.childAges}
+              </Badge>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 min-h-[3.5rem] text-sm leading-6 text-slate-600">
+        {member.bio
+          ? member.bio.slice(0, 92) + (member.bio.length > 92 ? "…" : "")
+          : `${discoveryUi.memberSince} · ${getMemberLocationLabel(member)}`}
+      </div>
+
+      <div className="mt-4 flex items-center justify-end text-sm font-medium text-rose-700 transition group-hover:text-rose-800">
+        <span className="rounded-full border border-rose-100 bg-white/90 px-3 py-1.5 text-xs font-semibold shadow-sm transition group-hover:border-rose-200">
+          {discoveryUi.viewProfile}
+        </span>
+      </div>
+    </button>
+  );
+}
+
 const FEED_BOOTSTRAP_TIMEOUT_MS = 12000;
 const FEED_MEMBERS_PAGE_SIZE = 24;
 const FEED_MEMBER_SPOTLIGHT_STEP = 8;
 const FEED_SHOP_PAGE_SIZE = 12;
 const FEED_SHOP_PREVIEW_STEP = 3;
+const FEED_POSTS_PAGE_SIZE = 12;
 
 function createFeedTimeoutError(code = "feed_bootstrap_timeout") {
   const error = new Error(code);
@@ -156,7 +253,7 @@ export default function FeedPage() {
         groupsResults: "Gwoup yo",
         shopResults: "Boutik la",
         recommendedForYou: "Rekòmande pou ou",
-        nearbyMoms: "Manman ki pre w",
+        nearbyMoms: "Pwofil ki pre w",
         stageContent: "Kontni pou etap ou",
         diasporaGroups: "Gwoup diaspora yo",
         noMembersMatch: "Pa gen manm ki koresponn ak rechèch la.",
@@ -164,8 +261,9 @@ export default function FeedPage() {
         noShopMatch: "Pa gen atik boutik ki koresponn ak rechèch la.",
         noRecommendations: "Nou poko jwenn rekòmandasyon pèsonalize.",
         viewProfile: "Wè pwofil",
+        viewGroup: "Wè gwoup la",
         viewGroups: "Wè gwoup yo",
-        openBoutique: "Louvri boutik la",
+        openBoutique: "Wè boutique la",
         openPost: "Li post la",
         memberSince: "Manm",
         relevantGroup: "Gwoup ki enpòtan",
@@ -174,15 +272,19 @@ export default function FeedPage() {
         childAgeBadge: "Laj timoun",
         cityBadge: "Vil",
         searchMembersGroupsShop: "Chèche manm, gwoup, posts oswa boutik",
-        heroEyebrow: "Seleksyon premium Lakou Manman",
-        heroHeadline: "Dekouvri manman, gwoup ak bon plan ki vrèman sanble avè w.",
-        heroBody: "Yon espas pi elegant pou jwenn pwofil aktif, kominote itil ak atik boutique ki matche ak lavi ou jodi a.",
-        memberSpotlight: "Manman pou dekouvri",
-        memberCarouselHint: "Glise otomatikman · kanpe lè sourit la pase",
+        heroEyebrow: "Dekouvèt Lakou Manman",
+        heroHeadline: "Pwofil, gwoup ak bon plan pou ou.",
+        heroBody: "Jwenn pi vit pwofil aktif, kominote itil ak atik boutique ki adapte ak lavi ou chak jou.",
+        memberSpotlight: "Pwofil pou ou",
         curatedGroupsTitle: "Gwoup pou rantre ladan yo",
         curatedShopTitle: "Boutique coup de cœur",
         premiumSelection: "Pou ou",
         discoverMember: "Dekouvri",
+        sameCityReason: "Menm vil",
+        sameCountryReason: "Menm peyi",
+        sameStageReason: "Menm etap lavi",
+        sharedInterestReason: "Sant enterè ki sanble",
+        communityReason: "Pou kominote ou",
         dailyQuestionPrompt: "Ki pi gwo defi w kòm manman semèn sa a?",
         dailyQuestionBody: "Dòmi tibebe, manje, fatig, tan pou tèt ou, oswa òganizasyon lakay?",
         loadError: "Nou pa t ka chaje feed la kounye a.",
@@ -190,6 +292,8 @@ export default function FeedPage() {
         loadMoreMembers: "Chaje plis manm",
         loadMoreShop: "Chaje plis atik",
         loadingMore: "Chajman an ap kontinye...",
+        loadMorePosts: "Chaje plis piblikasyon",
+        endOfFeed: "Ou rive nan fen aktyalite yo pou kounye a.",
       }
     : {
         discoveryTitle: "Mieux découvrir",
@@ -199,7 +303,7 @@ export default function FeedPage() {
         groupsResults: "Groupes",
         shopResults: "Boutique",
         recommendedForYou: "Recommandé pour vous",
-        nearbyMoms: "Mamans proches",
+        nearbyMoms: "Profils proches",
         stageContent: "Contenus pour votre étape",
         diasporaGroups: "Groupes diaspora",
         noMembersMatch: "Aucun membre ne correspond à la recherche.",
@@ -207,8 +311,9 @@ export default function FeedPage() {
         noShopMatch: "Aucun article boutique ne correspond à la recherche.",
         noRecommendations: "Aucune recommandation personnalisée pour le moment.",
         viewProfile: "Voir le profil",
+        viewGroup: "Voir le groupe",
         viewGroups: "Voir les groupes",
-        openBoutique: "Ouvrir la boutique",
+        openBoutique: "Voir la boutique",
         openPost: "Lire le post",
         memberSince: "Membre",
         relevantGroup: "Groupe pertinent",
@@ -217,15 +322,19 @@ export default function FeedPage() {
         childAgeBadge: "Âge enfant",
         cityBadge: "Ville",
         searchMembersGroupsShop: "Rechercher membres, groupes, posts ou boutique",
-        heroEyebrow: "Sélection premium Lakou Manman",
-        heroHeadline: "Découvrez des mamans, groupes et trouvailles qui vous ressemblent vraiment.",
-        heroBody: "Un espace plus premium pour repérer rapidement les profils actifs, les communautés utiles et les articles boutique adaptés à votre quotidien.",
-        memberSpotlight: "Mamans à découvrir",
-        memberCarouselHint: "Défilement automatique · pause au survol",
+        heroEyebrow: "Découverte Lakou Manman",
+        heroHeadline: "Profils, groupes et trouvailles pour vous.",
+        heroBody: "Repérez plus vite les profils actifs, les communautés utiles et les articles boutique adaptés à votre quotidien.",
+        memberSpotlight: "Profils pour vous",
         curatedGroupsTitle: "Groupes à rejoindre",
         curatedShopTitle: "Boutique coup de cœur",
         premiumSelection: "Pour vous",
         discoverMember: "Découvrir",
+        sameCityReason: "Même ville",
+        sameCountryReason: "Même pays",
+        sameStageReason: "Même étape de vie",
+        sharedInterestReason: "Centres d'intérêt proches",
+        communityReason: "Pour votre communauté",
         dailyQuestionPrompt: "Quel est votre plus grand défi de maman cette semaine ?",
         dailyQuestionBody: "Sommeil du bébé, repas, fatigue, temps pour vous ou organisation de la maison ?",
         loadError: "Le feed n'a pas pu être chargé pour le moment.",
@@ -233,6 +342,8 @@ export default function FeedPage() {
         loadMoreMembers: "Charger plus de membres",
         loadMoreShop: "Charger plus d'articles",
         loadingMore: "Chargement en cours...",
+        loadMorePosts: "Charger plus de publications",
+        endOfFeed: "Vous êtes arrivée à la fin des actualités pour le moment.",
       };
   
   const trendingTopics = getTrendingTopics(language);
@@ -242,6 +353,10 @@ export default function FeedPage() {
   const [memberSpotlightLimit, setMemberSpotlightLimit] = useState(8);
   const [shopQueryLimit, setShopQueryLimit] = useState(12);
   const [shopPreviewLimit, setShopPreviewLimit] = useState(3);
+  const [postsCursor, setPostsCursor] = useState(null);
+  const [hasMorePosts, setHasMorePosts] = useState(false);
+  const [loadingMorePosts, setLoadingMorePosts] = useState(false);
+  const loadMorePostsRef = useRef(null);
 
   const profileSignals = [
     userProfile?.city,
@@ -256,9 +371,9 @@ export default function FeedPage() {
     setLoading(true);
     setLoadError("");
     try {
-      const [postsData, usersData, groupsData, shopData] = await withFeedTimeout(
+      const [postsPage, usersData, groupsData, shopData] = await withFeedTimeout(
         Promise.all([
-          getPosts(),
+          getPostsPage({ limitCount: FEED_POSTS_PAGE_SIZE }),
           getDiscoverableUsers({ excludeUserId: user?.uid, limitCount: memberQueryLimit }),
           getGroups(),
           searchShopItems({ limitCount: shopQueryLimit }),
@@ -284,7 +399,9 @@ export default function FeedPage() {
         );
       });
 
-      setPosts(postsData);
+      setPosts(postsPage.posts || []);
+      setPostsCursor(postsPage.nextCursor || null);
+      setHasMorePosts(Boolean(postsPage.hasMore));
       setMembers(usersData);
       setGroups(Array.from(mergedGroupsMap.values()));
       setShopItems(shopData);
@@ -292,6 +409,8 @@ export default function FeedPage() {
       console.error("Error loading posts:", err);
       const isTimeoutError = ["feed_bootstrap_timeout"].includes(err?.code);
       setPosts([]);
+      setPostsCursor(null);
+      setHasMorePosts(false);
       setMembers([]);
       setShopItems([]);
       setGroups(getDefaultFeedGroups(t).map(normalizeGroupRecord));
@@ -304,6 +423,63 @@ export default function FeedPage() {
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
+
+  const handleLoadMorePosts = useCallback(async () => {
+    if (loading || loadingMorePosts || !hasMorePosts || !postsCursor) {
+      return;
+    }
+
+    setLoadingMorePosts(true);
+    try {
+      const nextPostsPage = await withFeedTimeout(
+        getPostsPage({ limitCount: FEED_POSTS_PAGE_SIZE, cursor: postsCursor }),
+        FEED_BOOTSTRAP_TIMEOUT_MS,
+        "feed_posts_load_more_timeout"
+      );
+
+      setPosts((currentPosts) => {
+        const existingIds = new Set(currentPosts.map((post) => post.id));
+        const nextUniquePosts = (nextPostsPage.posts || []).filter((post) => !existingIds.has(post.id));
+        return [...currentPosts, ...nextUniquePosts];
+      });
+      setPostsCursor(nextPostsPage.nextCursor || null);
+      setHasMorePosts(Boolean(nextPostsPage.hasMore));
+    } catch (error) {
+      console.error("Error loading more posts:", error);
+      setLoadError((previous) => previous || discoveryUi.loadError);
+    } finally {
+      setLoadingMorePosts(false);
+    }
+  }, [discoveryUi.loadError, hasMorePosts, loading, loadingMorePosts, postsCursor]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasMorePosts || loading || loadingMorePosts) {
+      return;
+    }
+
+    const target = loadMorePostsRef.current;
+    if (!target) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry?.isIntersecting) {
+          handleLoadMorePosts();
+        }
+      },
+      {
+        rootMargin: "300px 0px",
+      }
+    );
+
+    observer.observe(target);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [handleLoadMorePosts, hasMorePosts, loading, loadingMorePosts]);
 
   const filteredPosts = posts.filter((post) => {
     const s = search.toLowerCase();
@@ -379,8 +555,12 @@ export default function FeedPage() {
   const diasporaGroups = groups
     .filter((group) => `${group.name || ""} ${group.description || ""} ${group.id || ""}`.toLowerCase().includes("diaspora"))
     .slice(0, 3);
-  const activeGroups = (recommendedGroups.length > 0 ? recommendedGroups : filteredGroups).slice(0, 6);
-  const spotlightMembers = filteredMembers.slice(0, memberSpotlightLimit);
+  const spotlightMembers = filteredMembers
+    .slice(0, memberSpotlightLimit)
+    .map((member) => ({
+      ...member,
+      recommendationReason: getMemberRecommendationReason(discoveryUi, member, userProfile),
+    }));
   const marqueeMembers = spotlightMembers.length > 1 ? [...spotlightMembers, ...spotlightMembers] : spotlightMembers;
   const visibleShopItems = filteredShopItems.slice(0, shopPreviewLimit);
   const canLoadMoreMembers = filteredMembers.length > memberSpotlightLimit || members.length >= memberQueryLimit;
@@ -414,26 +594,28 @@ export default function FeedPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 shadow-lg shadow-rose-200">
+    <div className="space-y-6 overflow-x-hidden sm:space-y-7">
+      <div className="flex items-start gap-3 sm:gap-4">
+        <div className="flex h-11 w-11 items-center justify-center rounded-[1.35rem] bg-gradient-to-br from-rose-500 to-pink-600 shadow-lg shadow-rose-200 sm:h-12 sm:w-12 sm:rounded-2xl">
           <MessageCircle className="h-6 w-6 text-white" />
         </div>
-        <div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight">{t("feedTitle")}</h1>
-          <p className="mt-1 text-sm text-slate-500">
+        <div className="min-w-0">
+          <h1 className="font-display text-[1.85rem] font-semibold leading-[1.05] tracking-[-0.04em] text-slate-900 sm:text-[2.15rem]">
+            {t("feedTitle")}
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 sm:text-[0.97rem]">
             {t("feedDescription")}
           </p>
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1.4fr)_260px] 2xl:grid-cols-[240px_minmax(0,1.55fr)_280px]">
+      <div className="grid min-w-0 gap-6 overflow-x-hidden xl:grid-cols-[260px_minmax(0,1.45fr)_230px] 2xl:grid-cols-[290px_minmax(0,1.58fr)_250px]">
         {/* Left sidebar: Profile + Trending */}
-        <div className="space-y-6">
+        <div className="order-2 min-w-0 space-y-6 xl:order-1">
           {user && userProfile && (
-            <Card className="rounded-[2rem] border-0 shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg">{t("myProfile")}</CardTitle>
+            <Card className="rounded-[2rem] border border-white/70 bg-white/90 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.3)] backdrop-blur-[2px]">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-[1.02rem] font-semibold tracking-[-0.01em] text-slate-900">{t("myProfile")}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex items-center gap-3">
@@ -441,10 +623,10 @@ export default function FeedPage() {
                     {profilePhoto && <AvatarImage src={profilePhoto} />}
                     <AvatarFallback className="bg-gradient-to-br from-rose-400 to-pink-500 text-white">{getInitials(userProfile.name)}</AvatarFallback>
                   </Avatar>
-                  <div className="flex-1">
+                  <div className="min-w-0 flex-1">
                     <button
                       onClick={() => window.location.href = `/profile/${user.uid}`}
-                      className="font-medium text-slate-900 hover:text-rose-600 transition-colors"
+                      className="truncate font-medium text-slate-900 transition-colors hover:text-rose-600"
                     >
                       {userProfile.name}
                     </button>
@@ -461,53 +643,63 @@ export default function FeedPage() {
             </Card>
           )}
 
-          <Card className="rounded-[2rem] border-0 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
+          <Card className="rounded-[2rem] border border-white/70 bg-white/90 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.3)] backdrop-blur-[2px]">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-[1.02rem] font-semibold tracking-[-0.01em] text-slate-900">
                 <MapPin className="h-4 w-4 text-rose-500" /> {discoveryUi.nearbyMoms}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {nearbyMoms.length === 0 ? (
                 <p className="text-sm text-slate-500">{discoveryUi.noRecommendations}</p>
-              ) : nearbyMoms.map((member) => (
-                <button
-                  key={member.id}
-                  onClick={() => window.location.href = `/profile/${member.id}`}
-                  className="flex w-full items-center justify-between rounded-2xl border border-slate-100 px-3 py-2 text-left transition hover:border-rose-100 hover:bg-rose-50/50"
-                >
-                  <div>
-                    <div className="text-sm font-medium text-slate-800">{member.name || t("user")}</div>
-                    <div className="text-xs text-slate-500">{member.city || member.country || "Diaspora"}</div>
-                  </div>
-                  <Badge variant="secondary" className="rounded-full">{discoveryUi.nearbyBadge}</Badge>
-                </button>
-              ))}
+              ) : nearbyMoms.map((member) => {
+                const memberPhoto = resolveProfilePhoto(
+                  member.photo,
+                  member.photoURL,
+                  member.photoUpdatedAt || member.updatedAt
+                );
+
+                return (
+                  <button
+                    key={member.id}
+                    onClick={() => window.location.href = `/profile/${member.id}`}
+                    className="block w-full rounded-[1.45rem] border border-slate-100/90 bg-white/85 px-3.5 py-3 text-left shadow-[0_16px_38px_-34px_rgba(15,23,42,0.35)] transition hover:border-rose-100 hover:bg-rose-50/50"
+                  >
+                    <div className="flex items-start gap-3">
+                      <Avatar className="h-11 w-11 shrink-0 ring-2 ring-rose-100/80">
+                        {memberPhoto && <AvatarImage src={memberPhoto} />}
+                        <AvatarFallback className="bg-gradient-to-br from-rose-300 to-pink-500 text-white">
+                          {getInitials(member.name || t("user"))}
+                        </AvatarFallback>
+                      </Avatar>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="break-words text-[0.98rem] font-semibold leading-5 tracking-[-0.01em] text-slate-900">
+                          {member.name || t("user")}
+                        </div>
+                        <div className="mt-1 break-words text-xs leading-5 text-slate-500">
+                          {member.city || member.country || "Diaspora"}
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary" className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600">
+                            {discoveryUi.nearbyBadge}
+                          </Badge>
+                          <span className="rounded-full border border-rose-100 bg-white px-3 py-1 text-xs font-semibold text-rose-700 shadow-sm">
+                            {discoveryUi.viewProfile}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
             </CardContent>
           </Card>
 
-          <Card className="rounded-[2rem] border-0 bg-gradient-to-br from-rose-50 to-pink-50 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Filter className="h-4 w-4 text-rose-500" /> {t("trendingTopics")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {trendingTopics.map((topic) => (
-                <button
-                  key={topic}
-                  onClick={() => setSearch(topic)}
-                  className="block w-full rounded-2xl bg-white/80 px-3 py-2.5 text-left text-sm text-slate-700 transition-all hover:bg-white hover:shadow-sm hover:translate-x-1"
-                >
-                  <span className="text-rose-400">#</span> {topic}
-                </button>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-[2rem] border-0 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
+          <Card className="rounded-[2rem] border border-white/70 bg-white/90 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.3)] backdrop-blur-[2px]">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-[1.02rem] font-semibold tracking-[-0.01em] text-slate-900">
                 <Users className="h-4 w-4 text-rose-500" /> {discoveryUi.curatedGroupsTitle}
               </CardTitle>
             </CardHeader>
@@ -519,17 +711,22 @@ export default function FeedPage() {
                   type="button"
                   key={group.id}
                   onClick={() => router.push(`/groups/${group.id}`)}
-                  className="flex w-full items-start justify-between gap-3 rounded-[1.35rem] border border-slate-100 bg-slate-50/80 px-4 py-3 text-left transition hover:border-sky-100 hover:bg-sky-50/60"
+                  className="block w-full rounded-[1.45rem] border border-slate-100/90 bg-white/80 px-4 py-3.5 text-left shadow-[0_16px_38px_-34px_rgba(15,23,42,0.35)] transition hover:border-sky-100 hover:bg-sky-50/60"
                 >
-                  <div className="min-w-0">
-                    <div className="break-words font-medium text-slate-900">{group.name || group.id}</div>
+                  <div className="min-w-0 w-full">
+                    <div className="text-[0.96rem] font-semibold leading-5 tracking-[-0.01em] text-slate-900">{group.name || group.id}</div>
                     <div className="mt-1 text-xs leading-5 text-slate-500">
                       {group.description || `${group.membersCount || 0} ${t("members")}`}
                     </div>
                   </div>
-                  <Badge variant="secondary" className="rounded-full whitespace-nowrap bg-white text-slate-700">
-                    {group.membersCount || 0} {t("members")}
-                  </Badge>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 sm:justify-between">
+                    <Badge variant="secondary" className="inline-flex max-w-full rounded-full whitespace-normal bg-slate-100 text-left text-slate-700">
+                      {group.membersCount || 0} {t("members")}
+                    </Badge>
+                    <span className="rounded-full border border-sky-100 bg-white px-3 py-1 text-xs font-semibold text-sky-700 shadow-sm">
+                      {discoveryUi.viewGroup}
+                    </span>
+                  </div>
                 </button>
               ))}
             </CardContent>
@@ -537,27 +734,27 @@ export default function FeedPage() {
         </div>
 
         {/* Main content: Posts + Post form */}
-        <div className="space-y-6">
-          <Card className="rounded-[2rem] border-0 shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-lg">
+        <div className="order-1 min-w-0 space-y-6 xl:order-2">
+          <Card className="rounded-[2.15rem] border border-rose-100/60 bg-white/95 shadow-[0_25px_80px_-42px_rgba(15,23,42,0.2)]">
+            <CardHeader className="pb-2 sm:pb-3">
+              <CardTitle className="flex items-center gap-2 text-[1.02rem] font-semibold tracking-[-0.01em]">
                 <Sparkles className="h-4 w-4 text-rose-500" /> {discoveryUi.discoveryTitle}
               </CardTitle>
-              <CardDescription>{discoveryUi.discoveryDescription}</CardDescription>
+              <CardDescription className="text-sm leading-6 text-slate-500">{discoveryUi.discoveryDescription}</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="overflow-hidden rounded-[2rem] border border-rose-100/80 bg-[radial-gradient(circle_at_top_left,_rgba(251,207,232,0.4),_transparent_35%),linear-gradient(135deg,rgba(255,241,242,0.95),rgba(255,255,255,0.98)_48%,rgba(253,242,248,0.96))] p-4 shadow-[0_20px_70px_-35px_rgba(190,24,93,0.35)] sm:p-5">
-                <div className="space-y-5">
-                  <div className="space-y-5">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/75 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-rose-700 shadow-sm">
+            <CardContent className="space-y-6">
+              <div className="overflow-hidden rounded-[2.15rem] border border-rose-100/80 bg-[radial-gradient(circle_at_top_left,_rgba(251,207,232,0.4),_transparent_35%),linear-gradient(135deg,rgba(255,241,242,0.95),rgba(255,255,255,0.98)_48%,rgba(253,242,248,0.96))] p-4 shadow-[0_24px_80px_-36px_rgba(190,24,93,0.32)] sm:p-6">
+                <div className="space-y-6">
+                  <div className="space-y-6">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/75 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-rose-700 shadow-sm">
                       <Sparkles className="h-3.5 w-3.5" /> {discoveryUi.heroEyebrow}
                     </div>
 
                     <div className="space-y-2">
-                      <h2 className="max-w-3xl text-2xl font-semibold tracking-tight text-slate-900 sm:text-[2rem] sm:leading-tight">
+                      <h2 className="font-display max-w-3xl text-[1.95rem] font-semibold leading-[1.02] tracking-[-0.05em] text-slate-900 sm:text-[2.25rem] sm:leading-[1.04]">
                         {discoveryUi.heroHeadline}
                       </h2>
-                      <p className="max-w-2xl text-sm leading-6 text-slate-600 sm:text-[0.95rem]">
+                      <p className="max-w-2xl text-[0.96rem] leading-7 text-slate-600 sm:text-[1rem]">
                         {discoveryUi.heroBody}
                       </p>
                     </div>
@@ -569,11 +766,11 @@ export default function FeedPage() {
                           value={search}
                           onChange={(e) => setSearch(e.target.value)}
                           placeholder={discoveryUi.searchMembersGroupsShop}
-                          className="rounded-2xl border-white/70 bg-white/85 pl-9 shadow-sm"
+                          className="h-12 rounded-2xl border-white/70 bg-white/85 pl-9 shadow-sm"
                         />
                       </div>
                       <Select value={cityFilter} onValueChange={setCityFilter}>
-                        <SelectTrigger className="rounded-2xl border-white/70 bg-white/85 shadow-sm">
+                        <SelectTrigger className="h-12 rounded-2xl border-white/70 bg-white/85 shadow-sm">
                           <SelectValue placeholder={t("city")} />
                         </SelectTrigger>
                         <SelectContent>
@@ -585,33 +782,45 @@ export default function FeedPage() {
                       </Select>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <div className="rounded-[1.5rem] border border-white/70 bg-white/80 p-4 shadow-sm">
-                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{discoveryUi.allResults}</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">{filteredPosts.length + filteredMembers.length + filteredGroups.length + filteredShopItems.length}</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                        {t("trendingTopics")}
+                      </span>
+                      {trendingTopics.map((topic) => (
+                        <button
+                          key={topic}
+                          type="button"
+                          onClick={() => setSearch(topic)}
+                          className="rounded-full border border-white/70 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-rose-200 hover:bg-white hover:text-rose-700"
+                        >
+                          #{topic}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="inline-flex items-center rounded-full border border-white/70 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
+                        {filteredPosts.length + filteredMembers.length + filteredGroups.length + filteredShopItems.length} {discoveryUi.allResults.toLowerCase()}
                       </div>
-                      <div className="rounded-[1.5rem] border border-sky-100/70 bg-sky-50/85 p-4 shadow-sm">
-                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{discoveryUi.membersResults}</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">{filteredMembers.length}</div>
-                      </div>
-                      <div className="rounded-[1.5rem] border border-violet-100/70 bg-violet-50/85 p-4 shadow-sm">
-                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{discoveryUi.groupsResults}</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">{filteredGroups.length}</div>
-                      </div>
-                      <div className="rounded-[1.5rem] border border-amber-100/70 bg-amber-50/85 p-4 shadow-sm">
-                        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{discoveryUi.shopResults}</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">{filteredShopItems.length}</div>
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-[1.35rem] border border-white/70 bg-white/78 p-3.5 shadow-sm">
+                          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{discoveryUi.membersResults}</div>
+                          <div className="mt-1.5 text-xl font-semibold text-slate-900">{filteredMembers.length}</div>
+                        </div>
+                        <div className="rounded-[1.35rem] border border-white/70 bg-white/78 p-3.5 shadow-sm">
+                          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{discoveryUi.groupsResults}</div>
+                          <div className="mt-1.5 text-xl font-semibold text-slate-900">{filteredGroups.length}</div>
+                        </div>
+                        <div className="rounded-[1.35rem] border border-white/70 bg-white/78 p-3.5 shadow-sm">
+                          <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{discoveryUi.shopResults}</div>
+                          <div className="mt-1.5 text-xl font-semibold text-slate-900">{filteredShopItems.length}</div>
+                        </div>
                       </div>
                     </div>
 
                     <div className="space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                          <UserRound className="h-4 w-4 text-rose-500" /> {discoveryUi.memberSpotlight}
-                        </div>
-                        <Badge variant="secondary" className="rounded-full border border-white/70 bg-white/80 px-3 py-1 text-[11px] font-medium text-slate-600">
-                          {discoveryUi.memberCarouselHint}
-                        </Badge>
+                      <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                        <UserRound className="h-4 w-4 text-rose-500" /> {discoveryUi.memberSpotlight}
                       </div>
 
                       {spotlightMembers.length === 0 ? (
@@ -619,68 +828,37 @@ export default function FeedPage() {
                           {discoveryUi.noMembersMatch}
                         </div>
                       ) : (
-                        <div className="relative overflow-hidden rounded-[1.75rem] border border-white/70 bg-white/80 p-3 shadow-sm">
-                          <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-white via-white/80 to-transparent" />
-                          <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l from-white via-white/80 to-transparent" />
-                          <div className="feed-member-marquee">
-                            <div className="feed-member-track">
-                              {marqueeMembers.map((member, index) => {
-                                const memberPhoto = resolveProfilePhoto(
-                                  member.photo,
-                                  member.photoURL,
-                                  member.photoUpdatedAt || member.updatedAt
-                                );
-
-                                return (
-                                  <button
-                                    type="button"
+                        <>
+                          <div className="space-y-3 sm:hidden">
+                            {spotlightMembers.map((member) => (
+                              <SpotlightMemberCard
+                                key={member.id}
+                                member={member}
+                                t={t}
+                                discoveryUi={discoveryUi}
+                                compact
+                                onClick={() => router.push(`/profile/${member.id}`)}
+                              />
+                            ))}
+                          </div>
+                          <div className="relative hidden overflow-hidden rounded-[1.9rem] border border-white/70 bg-white/80 p-3 shadow-sm sm:block">
+                            <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-white via-white/80 to-transparent" />
+                            <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l from-white via-white/80 to-transparent" />
+                            <div className="feed-member-marquee">
+                              <div className="feed-member-track">
+                                {marqueeMembers.map((member, index) => (
+                                  <SpotlightMemberCard
                                     key={`${member.id}-${index}`}
+                                    member={member}
+                                    t={t}
+                                    discoveryUi={discoveryUi}
                                     onClick={() => router.push(`/profile/${member.id}`)}
-                                    className="card-hover group w-[240px] shrink-0 rounded-[1.5rem] border border-rose-100/80 bg-gradient-to-br from-white via-white to-rose-50/80 p-4 text-left shadow-sm"
-                                  >
-                                    <div className="flex items-start gap-3">
-                                      <Avatar className="h-14 w-14 ring-2 ring-rose-100">
-                                        {memberPhoto && <AvatarImage src={memberPhoto} />}
-                                        <AvatarFallback className="bg-gradient-to-br from-rose-400 to-pink-500 text-white">
-                                          {getInitials(member.name || t("user"))}
-                                        </AvatarFallback>
-                                      </Avatar>
-                                      <div className="min-w-0 flex-1">
-                                        <div className="truncate text-base font-semibold text-slate-900">
-                                          {member.name || t("user")}
-                                        </div>
-                                        <div className="mt-1 text-xs text-slate-500">
-                                          {getMemberLocationLabel(member)}
-                                        </div>
-                                        <div className="mt-2 flex flex-wrap gap-2">
-                                          <Badge variant="secondary" className="rounded-full bg-rose-50 text-rose-700">
-                                            {discoveryUi.premiumSelection}
-                                          </Badge>
-                                          {member.childAges ? (
-                                            <Badge variant="secondary" className="rounded-full bg-white text-slate-600">
-                                              {member.childAges}
-                                            </Badge>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div className="mt-4 min-h-[3.5rem] text-sm leading-6 text-slate-600">
-                                      {member.bio
-                                        ? member.bio.slice(0, 92) + (member.bio.length > 92 ? "…" : "")
-                                        : `${discoveryUi.memberSince} · ${getMemberLocationLabel(member)}`}
-                                    </div>
-
-                                    <div className="mt-4 flex items-center justify-between text-sm font-medium text-rose-700 transition group-hover:text-rose-800">
-                                      <span>{discoveryUi.discoverMember}</span>
-                                      <span className="rounded-full bg-rose-100 px-2.5 py-1 text-xs">{discoveryUi.viewProfile}</span>
-                                    </div>
-                                  </button>
-                                );
-                              })}
+                                  />
+                                ))}
+                              </div>
                             </div>
                           </div>
-                        </div>
+                        </>
                       )}
 
                       {canLoadMoreMembers ? (
@@ -703,31 +881,10 @@ export default function FeedPage() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-[2rem] border-0 shadow-sm">
-            <CardContent className="p-5">
-              <div className="mb-4 grid gap-3 md:grid-cols-[1fr_180px]">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder={t("searchPlaceholder")}
-                    className="rounded-2xl pl-9"
-                  />
-                </div>
-                <Select value={cityFilter} onValueChange={setCityFilter}>
-                  <SelectTrigger className="rounded-2xl">
-                    <SelectValue placeholder={t("city")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">{t("allCities")}</SelectItem>
-                    {cities.slice(1).map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+          <PostForm onPostCreated={loadPosts} collapsible />
 
+          <Card className="rounded-[2rem] border border-slate-200/70 bg-white/95 shadow-[0_20px_60px_-42px_rgba(15,23,42,0.3)]">
+            <CardContent className="p-4 sm:p-5">
               {loadError ? (
                 <div className="mb-4 rounded-[1.5rem] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                   {loadError}
@@ -741,25 +898,41 @@ export default function FeedPage() {
                   {t("noPosts")}
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-5">
                   {filteredPosts.map((post) => (
                     <div key={post.id} id={`feed-post-${post.id}`}>
                       <PostCard post={post} />
                     </div>
                   ))}
+
+                  {hasMorePosts ? (
+                    <div ref={loadMorePostsRef} className="flex justify-center pt-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-2xl"
+                        onClick={handleLoadMorePosts}
+                        disabled={loadingMorePosts}
+                      >
+                        {loadingMorePosts ? discoveryUi.loadingMore : discoveryUi.loadMorePosts}
+                      </Button>
+                    </div>
+                  ) : posts.length > 0 ? (
+                    <div className="pt-2 text-center text-sm text-slate-400">
+                      {discoveryUi.endOfFeed}
+                    </div>
+                  ) : null}
                 </div>
               )}
             </CardContent>
           </Card>
-
-          <PostForm onPostCreated={loadPosts} />
         </div>
 
         {/* Right sidebar */}
-        <div className="space-y-6">
-          <Card className="rounded-[2rem] border-0 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
+        <div className="order-3 min-w-0 space-y-6">
+          <Card className="rounded-[2rem] border border-white/70 bg-white/90 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.3)] backdrop-blur-[2px]">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-[1.02rem] font-semibold tracking-[-0.01em] text-slate-900">
                 <Sparkles className="h-4 w-4 text-rose-500" /> {discoveryUi.recommendedForYou}
               </CardTitle>
             </CardHeader>
@@ -773,10 +946,15 @@ export default function FeedPage() {
                     <button
                       key={post.id}
                       onClick={() => scrollToPost(post.id)}
-                      className="block w-full rounded-2xl border border-slate-100 px-3 py-2 text-left transition hover:border-rose-100 hover:bg-rose-50/50"
+                      className="block w-full rounded-[1.45rem] border border-slate-100/90 bg-white/80 px-3.5 py-3 text-left shadow-[0_16px_38px_-34px_rgba(15,23,42,0.35)] transition hover:border-rose-100 hover:bg-rose-50/50"
                     >
-                      <div className="text-sm font-medium text-slate-800">{post.title || t("feedTitle")}</div>
-                      <div className="mt-1 text-xs text-slate-500">{getTagLabel(post.tag, t) || discoveryUi.childAgeBadge}</div>
+                      <div className="text-[0.96rem] font-semibold leading-5 tracking-[-0.01em] text-slate-800">{post.title || t("feedTitle")}</div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2 sm:justify-between">
+                        <div className="text-xs leading-5 text-slate-500">{getTagLabel(post.tag, t) || discoveryUi.childAgeBadge}</div>
+                        <span className="rounded-full border border-rose-100 bg-white px-3 py-1 text-xs font-semibold text-rose-700 shadow-sm">
+                          {discoveryUi.openPost}
+                        </span>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -791,10 +969,15 @@ export default function FeedPage() {
                     <button
                       key={group.id}
                       onClick={() => window.location.href = `/groups/${group.id}`}
-                      className="flex w-full items-center justify-between rounded-2xl border border-slate-100 px-3 py-2 text-left transition hover:border-rose-100 hover:bg-rose-50/50"
+                      className="flex w-full flex-col items-stretch gap-3 rounded-[1.45rem] border border-slate-100/90 bg-white/80 px-3.5 py-3 text-left shadow-[0_16px_38px_-34px_rgba(15,23,42,0.35)] transition hover:border-rose-100 hover:bg-rose-50/50 sm:flex-row sm:items-center sm:justify-between"
                     >
-                      <span className="text-sm font-medium text-slate-800">{group.name}</span>
-                      <Badge variant="secondary" className="rounded-full">{discoveryUi.diasporaBadge}</Badge>
+                      <span className="w-full text-[0.96rem] font-semibold leading-5 tracking-[-0.01em] text-slate-800">{group.name}</span>
+                      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                        <Badge variant="secondary" className="rounded-full bg-slate-100 text-slate-600">{discoveryUi.diasporaBadge}</Badge>
+                        <span className="rounded-full border border-rose-100 bg-white px-3 py-1 text-xs font-semibold text-rose-700 shadow-sm">
+                          {discoveryUi.viewGroup}
+                        </span>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -802,9 +985,9 @@ export default function FeedPage() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-[2rem] border-0 bg-gradient-to-br from-rose-50 to-pink-50 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-lg">{t("dailyQuestion")}</CardTitle>
+          <Card className="rounded-[2rem] border border-rose-100/70 bg-gradient-to-br from-rose-50 via-white to-pink-50 shadow-[0_22px_60px_-44px_rgba(190,24,93,0.28)]">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-[1.02rem] font-semibold tracking-[-0.01em] text-slate-900">{t("dailyQuestion")}</CardTitle>
               <CardDescription>{t("dailyQuestionDesc")}</CardDescription>
             </CardHeader>
             <CardContent>
@@ -817,36 +1000,9 @@ export default function FeedPage() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-[2rem] border-0 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Users className="h-4 w-4 text-rose-500" /> {t("activeGroups")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {activeGroups.map((group) => (
-                <button
-                  key={group.id}
-                  onClick={() => window.location.href = `/groups/${group.id}`}
-                  className="flex w-full items-center justify-between rounded-2xl border border-slate-100 px-3 py-2.5 text-left text-sm text-slate-700 transition-all hover:bg-rose-50/50 hover:border-rose-100 hover:shadow-sm"
-                >
-                  <span className="min-w-0 flex-1 pr-2">
-                    <span className="block break-words font-medium text-slate-800">{group.name || group.id}</span>
-                    <span className="block text-xs text-slate-500">{group.membersCount || 0} {t("members")}</span>
-                  </span>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {recommendedGroups.some((recommendedGroup) => recommendedGroup.id === group.id) && (
-                      <Badge variant="secondary" className="rounded-full">{discoveryUi.relevantGroup}</Badge>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-[2rem] border-0 shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-lg">
+          <Card className="rounded-[2rem] border border-white/70 bg-white/90 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.3)] backdrop-blur-[2px]">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-[1.02rem] font-semibold tracking-[-0.01em] text-slate-900">
                 <ShoppingBag className="h-4 w-4 text-amber-500" /> {discoveryUi.curatedShopTitle}
               </CardTitle>
             </CardHeader>
@@ -858,16 +1014,21 @@ export default function FeedPage() {
                   type="button"
                   key={item.id}
                   onClick={() => router.push("/boutique")}
-                  className="flex w-full items-start justify-between gap-3 rounded-[1.35rem] border border-slate-100 bg-slate-50/80 px-4 py-3 text-left transition hover:border-amber-100 hover:bg-amber-50/60"
+                  className="flex w-full flex-col items-stretch gap-3 rounded-[1.45rem] border border-slate-100/90 bg-white/80 px-4 py-3.5 text-left shadow-[0_16px_38px_-34px_rgba(15,23,42,0.35)] transition hover:border-amber-100 hover:bg-amber-50/60 sm:flex-row sm:items-start sm:justify-between"
                 >
-                  <div className="min-w-0">
-                    <div className="break-words font-medium text-slate-900">{item.title}</div>
-                    <div className="mt-1 text-xs leading-5 text-slate-500">
+                  <div className="min-w-0 w-full">
+                    <div className="text-[0.96rem] font-semibold leading-5 tracking-[-0.01em] text-slate-900">{item.title}</div>
+                    <div className="mt-1 break-words text-xs leading-5 text-slate-500">
                       {item.location || "Diaspora"} • {item.shopName || item.authorName || "Lakou Manman"}
                     </div>
                   </div>
-                  <div className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm">
-                    {Number(item.price || 0).toFixed(2)} HTG
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-col sm:items-end">
+                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm">
+                      {Number(item.price || 0).toFixed(2)} HTG
+                    </div>
+                    <span className="rounded-full border border-amber-100 bg-white px-3 py-1 text-xs font-semibold text-amber-700 shadow-sm">
+                      {discoveryUi.openBoutique}
+                    </span>
                   </div>
                 </button>
               ))}

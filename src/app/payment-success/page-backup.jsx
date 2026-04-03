@@ -82,7 +82,7 @@ Stati: Peye ak siksè
 ====================================
 Lakou Manman S.A.
 Pòtoprens, Ayiti
-contact@lakou-manman.com
+contact@lakoumanman.com
 +509 32589391
 Mèsi pou konfyans ou !
 ====================================
@@ -102,7 +102,7 @@ Statut: Payé avec succès
 ====================================
 Lakou Manman S.A.
 Port-au-Prince, Haïti
-contact@lakou-manman.com
+contact@lakoumanman.com
 +509 32589391
 Merci pour votre confiance !
 ====================================

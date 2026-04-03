@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { createConversationRequest, getUserProfile } from "@/lib/firestore";
+import { createConversation, getUserProfile } from "@/lib/firestore";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,18 +48,10 @@ export default function UserProfilePage() {
     if (!user || user.uid === userId || !targetUser) return;
     setMessageLoading(true);
     try {
-      const result = await createConversationRequest({
-        fromUserId: user.uid,
-        toUserId: userId,
-      });
-
-      if (result.status === "existing_conversation") {
-        router.push(`/messages?conversationId=${result.conversationId}`);
-      } else {
-        router.push("/messages");
-      }
+      const conversationId = await createConversation([user.uid, userId]);
+      router.push(`/messages?conversationId=${conversationId}`);
     } catch (e) {
-      console.error("Error requesting conversation:", e);
+      console.error("Error opening conversation:", e);
       setDialogState({
         open: true,
         tone: "error",

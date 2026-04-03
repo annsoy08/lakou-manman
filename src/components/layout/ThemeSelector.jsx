@@ -14,16 +14,16 @@ export default function ThemeSelector() {
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/70 bg-white/80 text-slate-600 shadow-sm transition-colors hover:text-[#9B2335]"
+        className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/70 bg-white/80 text-slate-600 shadow-sm transition-colors hover:text-[#9B2335] sm:h-9 sm:w-9"
         style={{ boxShadow: `0 8px 20px -16px ${currentTheme.accent}` }}
         aria-label={t("changeTheme")}
         title={t("changeTheme")}
       >
         <div
-          className="flex h-6 w-6 items-center justify-center rounded-full border border-white"
+          className="flex h-5 w-5 items-center justify-center rounded-full border border-white sm:h-6 sm:w-6"
           style={{ backgroundColor: currentTheme.swatch }}
         >
-          <Palette className="h-3.5 w-3.5 text-white" />
+          <Palette className="h-3 w-3 text-white sm:h-3.5 sm:w-3.5" />
         </div>
       </button>
 

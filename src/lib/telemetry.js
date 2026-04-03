@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "./fetch-wrapper";
+
 const TELEMETRY_QUEUE_KEY = "lakou_manman_telemetry_queue_v1";
 const MAX_TELEMETRY_ENTRIES = 100;
 let telemetryFlushInFlight = false;
@@ -7,6 +9,16 @@ let telemetryUserContext = {
   role: "",
   isAuthenticated: false,
 };
+
+function isClientDebugLoggingEnabled() {
+  const flag = String(
+    process.env.NEXT_PUBLIC_ENABLE_CLIENT_DEBUG_LOGS
+      || process.env.NEXT_PUBLIC_ENABLE_TELEMETRY_DEBUG
+      || ""
+  ).trim().toLowerCase();
+
+  return flag === "true" || flag === "1" || flag === "yes";
+}
 
 function isBrowser() {
   return typeof window !== "undefined";
@@ -190,7 +202,7 @@ function recordTelemetry(type, name, payload = {}) {
   queue.push(entry);
   writeTelemetryQueue(queue);
 
-  if (getEnvironment() !== "production") {
+  if (getEnvironment() !== "production" && isClientDebugLoggingEnabled()) {
     const logger = type === "error" ? console.error : console.info;
     logger(`[telemetry:${type}] ${name}`, entry.payload);
   }
@@ -284,7 +296,7 @@ export function flushTelemetry(reason = "manual") {
 
   try {
     telemetryFlushInFlight = true;
-    fetch(endpoint, {
+    fetchWithTimeout(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,

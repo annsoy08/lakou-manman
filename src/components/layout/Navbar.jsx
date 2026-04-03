@@ -98,10 +98,10 @@ export default function Navbar() {
 
   return (
     <nav className="sticky top-0 z-50 overflow-x-clip border-b border-rose-100/70 bg-white/85 shadow-sm backdrop-blur-xl">
-      <div className="app-shell-container flex items-center justify-between gap-2 py-3 sm:gap-4">
+      <div className="app-shell-container flex items-center justify-between gap-2 py-2 sm:gap-4 sm:py-3">
         <Link href="/" className="flex min-w-0 shrink items-center gap-2 transition-transform hover:scale-[1.02] sm:gap-2.5">
-          <img src="/logo-lakou-manman.png" alt="Lakou Manman" className="h-11 w-auto sm:h-12" />
-          <span className="hidden whitespace-nowrap text-lg font-bold tracking-tight lg:block xl:text-xl">
+          <img src="/logo-lakou-manman.png" alt="Lakou Manman" className="h-9 w-auto sm:h-12" />
+          <span className="hidden whitespace-nowrap text-base font-bold tracking-tight lg:block xl:text-xl">
             <span className="gradient-text">Lakou</span> Manman
           </span>
         </Link>
@@ -139,15 +139,15 @@ export default function Navbar() {
         </div>
 
         {/* Auth area */}
-        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
           {user ? (
             <div ref={userMenuRef} className="relative">
               <button
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
-                className="flex max-w-full items-center gap-2 rounded-full border border-rose-100 bg-white/85 px-2 py-1.5 shadow-sm transition-all hover:border-rose-200 hover:shadow-md"
+                className="flex max-w-full items-center gap-1.5 rounded-full border border-rose-100 bg-white/85 px-1.5 py-1.5 shadow-sm transition-all hover:border-rose-200 hover:shadow-md sm:gap-2 sm:px-2"
               >
                 <div className="relative">
-                  <Avatar className="h-9 w-9">
+                  <Avatar className="h-8 w-8 sm:h-9 sm:w-9">
                     {profilePhoto && <AvatarImage src={profilePhoto} />}
                     <AvatarFallback className="text-xs">
                       {getInitials(displayName || "U")}
@@ -165,7 +165,7 @@ export default function Navbar() {
                   </div>
                   <div className="text-xs text-slate-500">{t("profile")}</div>
                 </div>
-                <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />
+                <ChevronDown className={`h-3.5 w-3.5 text-slate-500 transition-transform sm:h-4 sm:w-4 ${userMenuOpen ? "rotate-180" : ""}`} />
               </button>
 
               {userMenuOpen && (
@@ -247,7 +247,7 @@ export default function Navbar() {
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-2 rounded-full border border-rose-100 bg-white/80 p-1 shadow-sm">
+            <div className="flex items-center gap-1.5 rounded-full border border-rose-100 bg-white/80 p-1 shadow-sm sm:gap-2">
               <LanguageSelector />
               <ThemeSelector />
             </div>
@@ -257,7 +257,7 @@ export default function Navbar() {
           <Button
             variant="ghost"
             size="icon"
-            className="rounded-xl lg:hidden"
+            className="h-8 w-8 rounded-xl lg:hidden sm:h-10 sm:w-10"
             onClick={() => setMobileOpen(!mobileOpen)}
           >
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}

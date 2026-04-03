@@ -15,7 +15,7 @@ export default function GlobalError({ error, reset }) {
       <body>
         <div className="flex min-h-screen items-center justify-center px-4 py-10">
           <div className="w-full max-w-lg rounded-[2rem] border border-rose-100 bg-white p-8 text-center shadow-sm">
-            <h2 className="text-2xl font-semibold text-slate-900">L'application a rencontré une erreur critique</h2>
+            <h2 className="text-2xl font-semibold text-slate-900">L&apos;application a rencontré une erreur critique</h2>
             <p className="mt-3 text-sm text-slate-500">
               Vous pouvez tenter un nouveau rendu immédiatement.
             </p>

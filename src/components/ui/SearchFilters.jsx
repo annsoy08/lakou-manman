@@ -117,29 +117,29 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
   const sellerSources = getSellerSources(t);
 
   return (
-    <Card className="rounded-2xl border-0 shadow-sm">
-      <CardContent className="p-4">
+    <Card className="rounded-[2rem] border border-white/80 bg-[linear-gradient(135deg,_rgba(255,255,255,0.98)_0%,_rgba(250,245,247,0.98)_52%,_rgba(252,248,249,0.98)_100%)] shadow-[0_24px_80px_-48px_rgba(108,31,50,0.14)]">
+      <CardContent className="p-5">
         {/* Search bar */}
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-3 lg:flex-row">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
               placeholder={t("shopSearchPlaceholder")}
               value={filters.searchQuery || ""}
               onChange={(e) => onChange({ ...filters, searchQuery: e.target.value })}
-              className="pl-10 rounded-xl"
+              className="rounded-[1rem] border-[#e6d5db] bg-white/90 pl-10 shadow-sm"
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
             />
           </div>
           
-          <Button onClick={handleSearch} className="rounded-xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C]">
+          <Button onClick={handleSearch} className="w-full rounded-[1rem] bg-gradient-to-r from-[#6C1F32] to-[#4B1021] shadow-[0_16px_34px_-18px_rgba(108,31,50,0.38)] transition-all hover:-translate-y-0.5 hover:brightness-110 lg:w-auto">
             <Search className="h-4 w-4" />
           </Button>
           
           <Button
             variant="outline"
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="rounded-xl"
+            className="w-full rounded-[1rem] border-[#e6d5db] bg-white/85 shadow-sm transition-all hover:bg-white lg:w-auto"
           >
             <Filter className="h-4 w-4 mr-2" />
             {t("filters")}
@@ -149,9 +149,9 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
 
         {/* Active filters */}
         {hasActiveFilters() && (
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
             {filters.category !== "all" && (
-              <Badge variant="secondary" className="rounded-full">
+              <Badge variant="secondary" className="rounded-full border border-[#e6d5db] bg-white/90 px-3 py-1 text-slate-700 shadow-sm">
                 {categories.find(c => c.id === filters.category)?.label}
                 <X
                   className="ml-1 h-3 w-3 cursor-pointer"
@@ -161,7 +161,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
             )}
             
             {filters.condition !== "all" && (
-              <Badge variant="secondary" className="rounded-full">
+              <Badge variant="secondary" className="rounded-full border border-[#e6d5db] bg-white/90 px-3 py-1 text-slate-700 shadow-sm">
                 {conditions.find(c => c.id === filters.condition)?.label}
                 <X
                   className="ml-1 h-3 w-3 cursor-pointer"
@@ -171,7 +171,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
             )}
             
             {(filters.minPrice || filters.maxPrice) && (
-              <Badge variant="secondary" className="rounded-full">
+              <Badge variant="secondary" className="rounded-full border border-[#e6d5db] bg-white/90 px-3 py-1 text-slate-700 shadow-sm">
                 {filters.minPrice ? `${filters.minPrice} HTG` : "0"} -{" "}
                 {filters.maxPrice ? `${filters.maxPrice} HTG` : "∞"}
                 <X
@@ -185,7 +185,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
             )}
             
             {filters.location && (
-              <Badge variant="secondary" className="rounded-full">
+              <Badge variant="secondary" className="rounded-full border border-[#e6d5db] bg-white/90 px-3 py-1 text-slate-700 shadow-sm">
                 <MapPin className="h-3 w-3 mr-1" />
                 {filters.location}
                 <X
@@ -196,7 +196,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
             )}
 
             {filters.sellerSource !== "all" && (
-              <Badge variant="secondary" className="rounded-full">
+              <Badge variant="secondary" className="rounded-full border border-[#e6d5db] bg-white/90 px-3 py-1 text-slate-700 shadow-sm">
                 {sellerSources.find((source) => source.id === filters.sellerSource)?.label}
                 <X
                   className="ml-1 h-3 w-3 cursor-pointer"
@@ -206,7 +206,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
             )}
 
             {filters.shopName && (
-              <Badge variant="secondary" className="rounded-full">
+              <Badge variant="secondary" className="rounded-full border border-[#e6d5db] bg-white/90 px-3 py-1 text-slate-700 shadow-sm">
                 {filters.shopName}
                 <X
                   className="ml-1 h-3 w-3 cursor-pointer"
@@ -219,7 +219,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
               variant="ghost"
               size="sm"
               onClick={handleClear}
-              className="h-6 rounded-full text-xs"
+              className="h-8 rounded-full border border-transparent px-3 text-xs text-[#7E243A] transition-all hover:border-[#e6d5db] hover:bg-white"
             >
               {t("shopClearAll")}
             </Button>
@@ -228,10 +228,10 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
 
         {/* Advanced filters */}
         {showAdvanced && (
-          <div className="mt-4 space-y-4 border-t pt-4">
+          <div className="mt-5 space-y-5 rounded-[1.5rem] border border-[#ead7de] bg-white/70 p-4 shadow-[0_18px_40px_-34px_rgba(108,31,50,0.12)] backdrop-blur-sm">
             {/* Category */}
             <div>
-              <label className="mb-2 block text-sm font-medium">{t("allCategories")}</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">{t("allCategories")}</label>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {categories.map((category) => (
                   <Button
@@ -239,10 +239,10 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
                     variant={filters.category === category.id ? "default" : "outline"}
                     size="sm"
                     onClick={() => onChange({ ...filters, category: category.id })}
-                    className={`rounded-xl ${
+                    className={`rounded-xl border-[#e6d5db] ${
                       filters.category === category.id
-                        ? "bg-gradient-to-r from-[#9B2335] to-[#7B1A2C]"
-                        : ""
+                        ? "bg-gradient-to-r from-[#6C1F32] to-[#4B1021] shadow-[0_14px_30px_-18px_rgba(108,31,50,0.34)]"
+                        : "bg-white/90 hover:bg-white"
                     }`}
                   >
                     {category.label}
@@ -253,7 +253,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
 
             {/* Condition */}
             <div>
-              <label className="mb-2 block text-sm font-medium">{t("condition")}</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">{t("condition")}</label>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {conditions.map((condition) => (
                   <Button
@@ -261,10 +261,10 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
                     variant={filters.condition === condition.id ? "default" : "outline"}
                     size="sm"
                     onClick={() => onChange({ ...filters, condition: condition.id })}
-                    className={`rounded-xl ${
+                    className={`rounded-xl border-[#e6d5db] ${
                       filters.condition === condition.id
-                        ? "bg-gradient-to-r from-[#9B2335] to-[#7B1A2C]"
-                        : ""
+                        ? "bg-gradient-to-r from-[#6C1F32] to-[#4B1021] shadow-[0_14px_30px_-18px_rgba(108,31,50,0.34)]"
+                        : "bg-white/90 hover:bg-white"
                     }`}
                   >
                     {condition.label}
@@ -274,7 +274,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium">
+              <label className="mb-2 block text-sm font-medium text-slate-700">
                 {t("shopSellerSourceLabel")}
               </label>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -289,10 +289,10 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
                         shopName: source.id === "affiliate_shop" ? filters.shopName || "" : "",
                       })
                     }
-                    className={`rounded-xl ${
+                    className={`rounded-xl border-[#e6d5db] ${
                       filters.sellerSource === source.id
-                        ? "bg-gradient-to-r from-[#9B2335] to-[#7B1A2C]"
-                        : ""
+                        ? "bg-gradient-to-r from-[#6C1F32] to-[#4B1021] shadow-[0_14px_30px_-18px_rgba(108,31,50,0.34)]"
+                        : "bg-white/90 hover:bg-white"
                     }`}
                   >
                     {source.label}
@@ -303,7 +303,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
 
             {(shopOptions.length > 0 || filters.shopName) && (
               <div>
-                <label className="mb-2 block text-sm font-medium">{t("shopPartnerFilterLabel")}</label>
+                <label className="mb-2 block text-sm font-medium text-slate-700">{t("shopPartnerFilterLabel")}</label>
                 <select
                   value={filters.shopName || ""}
                   onChange={(e) =>
@@ -312,7 +312,7 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
                       shopName: e.target.value,
                     })
                   }
-                  className="w-full rounded-xl border bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9B2335]"
+                  className="w-full rounded-xl border border-[#e6d5db] bg-white/90 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[#7E243A]"
                 >
                   <option value="">{t("shopAllPartnerShops")}</option>
                   {shopOptions.map((shopName) => (
@@ -326,26 +326,26 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
 
             {/* Price range */}
             <div>
-              <label className="mb-2 block text-sm font-medium">{t("price")} (HTG)</label>
-              <div className="flex gap-2">
-                <div className="relative">
+              <label className="mb-2 block text-sm font-medium text-slate-700">{t("price")} (HTG)</label>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="relative flex-1">
                   <DollarSign className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
                     type="number"
                     placeholder={t("shopMinPrice")}
                     value={priceRange.min}
                     onChange={(e) => setPriceRange({ ...priceRange, min: e.target.value })}
-                    className="pl-10 rounded-xl"
+                    className="rounded-xl border-[#e6d5db] bg-white/90 pl-10 shadow-sm"
                   />
                 </div>
-                <div className="relative">
+                <div className="relative flex-1">
                   <DollarSign className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
                     type="number"
                     placeholder={t("shopMaxPrice")}
                     value={priceRange.max}
                     onChange={(e) => setPriceRange({ ...priceRange, max: e.target.value })}
-                    className="pl-10 rounded-xl"
+                    className="rounded-xl border-[#e6d5db] bg-white/90 pl-10 shadow-sm"
                   />
                 </div>
               </div>
@@ -353,11 +353,11 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
 
             {/* Location */}
             <div>
-              <label className="mb-2 block text-sm font-medium">{t("location")}</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">{t("location")}</label>
               <select
                 value={filters.location || ""}
                 onChange={(e) => onChange({ ...filters, location: e.target.value })}
-                className="w-full rounded-xl border bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9B2335]"
+                className="w-full rounded-xl border border-[#e6d5db] bg-white/90 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[#7E243A]"
               >
                 <option value="">{t("shopAllLocations")}</option>
                 {locations.map((location) => (
@@ -369,11 +369,11 @@ export default function SearchFilters({ filters, onChange, onSearch, shopOptions
             </div>
 
             {/* Apply buttons */}
-            <div className="flex gap-2 pt-2">
-              <Button onClick={handleSearch} className="rounded-xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C]">
+            <div className="flex flex-col gap-2 pt-2 sm:flex-row">
+              <Button onClick={handleSearch} className="w-full rounded-[1rem] bg-gradient-to-r from-[#6C1F32] to-[#4B1021] shadow-[0_16px_34px_-18px_rgba(108,31,50,0.38)] transition-all hover:-translate-y-0.5 hover:brightness-110 sm:w-auto">
                 {t("shopApplyFilters")}
               </Button>
-              <Button variant="outline" onClick={handleClear} className="rounded-xl">
+              <Button variant="outline" onClick={handleClear} className="w-full rounded-[1rem] border-[#e6d5db] bg-white/90 shadow-sm transition-all hover:bg-white sm:w-auto">
                 {t("shopResetFilters")}
               </Button>
             </div>

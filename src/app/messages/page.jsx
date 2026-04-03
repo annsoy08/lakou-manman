@@ -9,32 +9,41 @@ import {
   markMessagesAsRead,
   markMessagesAsDelivered,
   setConversationTypingState,
-  getDiscoverableUsers,
+  createConversation,
+  getUserConversations,
+  getUserConversationCalls,
+  getDiscoverableUsersPage,
   subscribeToUserConversationRequests,
   subscribeToUserConversations,
   subscribeToConversationMessages,
-  createConversationRequest,
+  subscribeToConversationCall,
+  subscribeToUserConversationCalls,
   acceptConversationRequest,
+  acceptConversationCall,
   declineConversationRequest,
+  declineConversationCall,
   blockUser,
+  endConversationCall,
   unblockUser,
   reportUser,
   hideConversationForUser,
   muteConversationForUser,
+  startConversationCall,
   subscribeToBlockedUsers,
   subscribeToUserConversationSafetySettings,
-} from "@/lib/firestore";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+ } from "@/lib/firestore";
+ import { Card, CardContent } from "@/components/ui/card";
+ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import ActionDialog from "@/components/ui/action-dialog";
-import VoiceRecorder from "@/components/messages/VoiceRecorder";
-import ImageShare from "@/components/messages/ImageShare";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { getFirebaseStorage } from "@/lib/firebase";
-import {
+ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+ import ActionDialog from "@/components/ui/action-dialog";
+ import AgoraAudioCallDialog from "@/components/messages/AgoraAudioCallDialog";
+ import VoiceRecorder from "@/components/messages/VoiceRecorder";
+ import ImageShare from "@/components/messages/ImageShare";
+ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+ import { getFirebaseStorage } from "@/lib/firebase";
+ import {
   MessageCircle,
   Send,
   ArrowLeft,
@@ -45,12 +54,17 @@ import {
   CheckCheck,
   Clock,
   AlertCircle,
-} from "lucide-react";
-import { getInitials } from "@/lib/utils";
+  Phone,
+  Search,
+  MoreHorizontal,
+ } from "lucide-react";
+ import { getInitials } from "@/lib/utils";
 
 const ONLINE_PRESENCE_TTL_MS = 75 * 1000;
 const TYPING_STATUS_TTL_MS = 4000;
 const MESSAGES_BOOTSTRAP_TIMEOUT_MS = 12000;
+const MESSAGES_LISTENER_RETRY_LIMIT = 5;
+const DIRECTORY_PAGE_SIZE = 36;
 const EMOJI_OPTIONS = [
   "😊",
   "😂",
@@ -90,12 +104,41 @@ const EMOJI_OPTIONS = [
   "🌈",
   "💐",
   "🫶",
-  "👌",
-  "📌",
+  "🌟",
 ];
 
+function normalizeSearchTerm(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function matchesSearchTerm(searchTerm, values = []) {
+  if (!searchTerm) {
+    return true;
+  }
+
+  return values
+    .filter((value) => typeof value === "string" && value.trim())
+    .map((value) => value.trim().toLowerCase())
+    .some((value) => value.includes(searchTerm));
+}
+
+function isRetryableMessageListenerError(error) {
+  const code = String(error?.code || "").trim().toLowerCase();
+  const message = String(error?.message || "").trim().toLowerCase();
+
+  return code === "permission-denied"
+    || code === "firestore/permission-denied"
+    || code === "unavailable"
+    || code === "firestore/unavailable"
+    || code === "failed-precondition"
+    || code === "firestore/failed-precondition"
+    || message.includes("insufficient permissions")
+    || message.includes("client is offline")
+    || message.includes("network");
+}
+
 export default function MessagesPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { t, language } = useLanguage();
   const router = useRouter();
   const discoveryUi = language === "ht"
@@ -115,9 +158,9 @@ export default function MessagesPage() {
         openConversation: "Louvri diskisyon an",
         requestConversation: "Voye yon mesaj",
         pending: "An atant",
-        requestCreated: "Demann mesaj la voye.",
+        requestCreated: "Diskisyon an pare.",
         requestPending: "Gen deja yon demann mesaj an atant pou moun sa a.",
-        requestError: "Nou pa t ka voye demann nan.",
+        requestError: "Nou pa t ka louvri diskisyon an.",
         requestAccepted: "Diskisyon an pare.",
         requestDeclined: "Demann nan refize.",
         onlineNow: "anliy kounye a",
@@ -170,6 +213,40 @@ export default function MessagesPage() {
         cannotSendBlocked: "Ou pa ka voye mesaj nan konvèsasyon sa a kounye a.",
         emojiPicker: "Emoji",
         emojiPickerTitle: "Ajoute yon emoji",
+        searchPeoplePlaceholder: "Chèche yon moun, yon vil oswa yon peyi...",
+        searchSidebarPlaceholder: "Chèche nan demann yo, diskisyon yo ak moun yo...",
+        loadMorePeople: "Chaje plis moun",
+        loadingPeople: "Ap chaje plis moun...",
+        memberSearchEmpty: "Pa gen moun ki koresponn ak rechèch sa a pou kounye a.",
+        searchNoResults: "Pa gen rezilta ki koresponn ak rechèch sa a pou kounye a.",
+        filterAll: "Tout",
+        manageConversation: "Jere diskisyon an",
+        callAction: "Rele",
+        callTitle: "Apèl odyo",
+        callBadge: "Agora",
+        callConnecting: "Ap konekte apèl la...",
+        callWaiting: "Ap tann moun nan reponn...",
+        callWaitingDescription: "Lòt moun nan kapab rantre nan apèl la dèske li aksepte li.",
+        callConnected: "Ou konekte sou apèl la.",
+        callParticipantConnected: "Lòt moun nan konekte sou apèl la.",
+        callConnectionError: "Nou pa t ka konekte apèl la kounye a.",
+        callConfigMissingError: "Apèl odyo yo poko konfigire sou aplikasyon an. Ajoute kle Agora yo pou aktive yo.",
+        callSdkMissingError: "Modil apèl odyo a poko enstale sou pwojè a.",
+        callAuthRequiredError: "Ou dwe konekte ankò pou itilize apèl odyo a.",
+        callMute: "Fèmen mikwo",
+        callUnmute: "Relimen mikwo",
+        callEnd: "Fèmen",
+        callClose: "Fèmen fenèt la",
+        callUnknownParticipant: "Patisipan",
+        incomingCall: "Apèl k ap antre",
+        incomingCallTitle: "Apèl k ap antre",
+        incomingCallMessage: "vle pale avè w kounye a.",
+        callAccept: "Reponn",
+        callDecline: "Refize",
+        callEnded: "Apèl la fini.",
+        callDeclined: "Apèl la refize.",
+        callMissed: "Ou gen yon apèl manke.",
+        callNoAnswer: "Apèl la pa jwenn repons.",
         loadError: "Nou pa t ka chaje mesaj yo kounye a.",
         loadTimeout: "Chajman mesaj yo pran twòp tan. Verifye koneksyon an epi eseye ankò.",
         conversationLoadError: "Nou pa t ka chaje konvèsasyon sa a kounye a.",
@@ -190,9 +267,9 @@ export default function MessagesPage() {
         openConversation: "Ouvrir la discussion",
         requestConversation: "Envoyer un message",
         pending: "En attente",
-        requestCreated: "La demande de message a été envoyée.",
+        requestCreated: "La discussion est prête.",
         requestPending: "Une demande de message est déjà en attente pour cette personne.",
-        requestError: "Impossible d'envoyer la demande.",
+        requestError: "Impossible d'ouvrir la discussion.",
         requestAccepted: "La discussion est prête.",
         requestDeclined: "La demande a été refusée.",
         onlineNow: "en ligne maintenant",
@@ -245,6 +322,40 @@ export default function MessagesPage() {
         cannotSendBlocked: "Vous ne pouvez pas envoyer de message dans cette conversation pour le moment.",
         emojiPicker: "Emojis",
         emojiPickerTitle: "Ajouter un emoji",
+        searchPeoplePlaceholder: "Rechercher une personne, une ville ou un pays...",
+        searchSidebarPlaceholder: "Rechercher dans les demandes, discussions et personnes...",
+        loadMorePeople: "Charger plus de personnes",
+        loadingPeople: "Chargement de plus de personnes...",
+        memberSearchEmpty: "Aucune personne ne correspond à cette recherche pour le moment.",
+        searchNoResults: "Aucun résultat ne correspond à cette recherche pour le moment.",
+        filterAll: "Tout",
+        manageConversation: "Gérer la discussion",
+        callAction: "Appeler",
+        callTitle: "Appel audio",
+        callBadge: "Agora",
+        callConnecting: "Connexion de l'appel...",
+        callWaiting: "En attente de réponse...",
+        callWaitingDescription: "La personne pourra rejoindre l'appel dès qu'elle l'acceptera.",
+        callConnected: "Vous êtes connecté à l'appel.",
+        callParticipantConnected: "La personne a rejoint l'appel.",
+        callConnectionError: "Impossible de connecter l'appel pour le moment.",
+        callConfigMissingError: "Les appels audio ne sont pas encore configurés dans l'application. Ajoutez les clés Agora pour les activer.",
+        callSdkMissingError: "Le module d'appel audio n'est pas encore installé sur le projet.",
+        callAuthRequiredError: "Reconnectez-vous pour utiliser l'appel audio.",
+        callMute: "Couper le micro",
+        callUnmute: "Réactiver le micro",
+        callEnd: "Terminer",
+        callClose: "Fermer",
+        callUnknownParticipant: "Participant",
+        incomingCall: "Appel entrant",
+        incomingCallTitle: "Appel entrant",
+        incomingCallMessage: "souhaite vous parler maintenant.",
+        callAccept: "Répondre",
+        callDecline: "Refuser",
+        callEnded: "L'appel est terminé.",
+        callDeclined: "L'appel a été refusé.",
+        callMissed: "Vous avez un appel manqué.",
+        callNoAnswer: "L'appel est resté sans réponse.",
         loadError: "Les messages n'ont pas pu être chargés pour le moment.",
         loadTimeout: "Le chargement des messages a dépassé le délai prévu. Vérifiez la connexion puis réessayez.",
         conversationLoadError: "Cette conversation n'a pas pu être chargée pour le moment.",
@@ -264,15 +375,32 @@ export default function MessagesPage() {
   const [requestActionId, setRequestActionId] = useState("");
   const [requestingMemberId, setRequestingMemberId] = useState("");
   const [safetyActionLoading, setSafetyActionLoading] = useState("");
+  const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
+  const [activeSidebarFilter, setActiveSidebarFilter] = useState("all");
+  const [memberDirectoryCursor, setMemberDirectoryCursor] = useState(null);
+  const [hasMoreDirectoryMembers, setHasMoreDirectoryMembers] = useState(false);
+  const [loadingMoreDirectoryMembers, setLoadingMoreDirectoryMembers] = useState(false);
+  const [conversationActionsOpen, setConversationActionsOpen] = useState(false);
+  const [conversationCalls, setConversationCalls] = useState([]);
+  const [currentCallSession, setCurrentCallSession] = useState(null);
+  const [callDialogOpen, setCallDialogOpen] = useState(false);
+  const [callActionLoading, setCallActionLoading] = useState("");
   const messagesEndRef = useRef(null);
+  const conversationActionsRef = useRef(null);
   const [showImageShare, setShowImageShare] = useState(false);
   const [audioBlob, setAudioBlob] = useState(null);
   const [audioDuration, setAudioDuration] = useState(0);
   const [clearAudio, setClearAudio] = useState(false);
   const [requestedConversationId, setRequestedConversationId] = useState("");
+  const [requestedMemberId, setRequestedMemberId] = useState("");
   const [presenceNow, setPresenceNow] = useState(() => Date.now());
   const [composerFeedback, setComposerFeedback] = useState(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [listenerBootstrapRevision, setListenerBootstrapRevision] = useState(0);
+  const handledMissedCallKeysRef = useRef(new Set());
+  const sessionStartMsRef = useRef(Date.now());
+  const listenerRetryCountRef = useRef(0);
+  const listenerRetryTimeoutRef = useRef(null);
   const [requestDialog, setRequestDialog] = useState({
     open: false,
     title: "",
@@ -292,10 +420,14 @@ export default function MessagesPage() {
   const publishedTypingStateRef = useRef({ conversationId: "", isTyping: false });
 
   useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
     if (!user) {
       router.replace("/login");
     }
-  }, [user, router]);
+  }, [authLoading, user, router]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -304,6 +436,7 @@ export default function MessagesPage() {
 
     const params = new URLSearchParams(window.location.search);
     setRequestedConversationId(params.get("conversationId") || "");
+    setRequestedMemberId(params.get("memberId") || "");
   }, []);
 
   useEffect(() => {
@@ -321,7 +454,13 @@ export default function MessagesPage() {
   }, []);
 
   useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
     if (!user) {
+      setLoading(false);
+      setLoadError("");
       return;
     }
 
@@ -338,6 +477,13 @@ export default function MessagesPage() {
           setLoadError(discoveryUi.loadTimeout);
         }, MESSAGES_BOOTSTRAP_TIMEOUT_MS)
       : null;
+    let retryScheduled = false;
+
+    const clearBootstrapTimeout = () => {
+      if (bootstrapTimeoutId && typeof window !== "undefined") {
+        window.clearTimeout(bootstrapTimeoutId);
+      }
+    };
 
     const settleBootstrap = () => {
       if (bootstrapResolved) {
@@ -345,91 +491,418 @@ export default function MessagesPage() {
       }
 
       bootstrapResolved = true;
-      if (bootstrapTimeoutId && typeof window !== "undefined") {
-        window.clearTimeout(bootstrapTimeoutId);
-      }
+      clearBootstrapTimeout();
       setLoading(false);
     };
 
-    const unsubscribeConversations = subscribeToUserConversations(
-      user.uid,
-      (nextConversations) => {
-        setConversations(nextConversations);
-        settleBootstrap();
-      },
-      (error) => {
-        console.error("Error subscribing to conversations:", error);
-        setLoadError(discoveryUi.loadError);
-        settleBootstrap();
+    const clearListenerRetryTimeout = () => {
+      if (listenerRetryTimeoutRef.current && typeof window !== "undefined") {
+        window.clearTimeout(listenerRetryTimeoutRef.current);
+        listenerRetryTimeoutRef.current = null;
       }
-    );
+    };
+
+    const resetListenerRetryState = () => {
+      listenerRetryCountRef.current = 0;
+      clearListenerRetryTimeout();
+    };
+
+    const scheduleListenerRetry = (error) => {
+      if (
+        retryScheduled
+        || !isRetryableMessageListenerError(error)
+        || listenerRetryCountRef.current >= MESSAGES_LISTENER_RETRY_LIMIT
+        || typeof window === "undefined"
+      ) {
+        return false;
+      }
+
+      retryScheduled = true;
+      listenerRetryCountRef.current += 1;
+      console.warn("Retrying messages listeners after transient Firestore error:", {
+        code: String(error?.code || "").trim(),
+        message: String(error?.message || "").trim(),
+        attempt: listenerRetryCountRef.current,
+        limit: MESSAGES_LISTENER_RETRY_LIMIT,
+      });
+      clearBootstrapTimeout();
+      clearListenerRetryTimeout();
+      setLoadError("");
+      setLoading(true);
+      listenerRetryTimeoutRef.current = window.setTimeout(() => {
+        listenerRetryTimeoutRef.current = null;
+        setListenerBootstrapRevision((currentValue) => currentValue + 1);
+      }, 900 * listenerRetryCountRef.current);
+      return true;
+    };
 
     let isActive = true;
+    let unsubscribeConversations = () => {};
+    let unsubscribeRequests = () => {};
+    let unsubscribeBlockedUsers = () => {};
+    let unsubscribeConversationSafety = () => {};
+    let unsubscribeConversationCalls = () => {};
 
-    getDiscoverableUsers({
-      excludeUserId: user.uid,
-      limitCount: 120,
-    })
-      .then((discoverableUsers) => {
+    const loadConversationsFallback = async () => {
+      try {
+        const nextConversations = await getUserConversations(user.uid);
+        if (!isActive) {
+          return true;
+        }
+
+        resetListenerRetryState();
+        setLoadError("");
+        setConversations(Array.isArray(nextConversations) ? nextConversations.filter(Boolean) : []);
+        settleBootstrap();
+        return true;
+      } catch (error) {
+        if (!isActive) {
+          return false;
+        }
+
+        console.error("Error loading conversations fallback:", error);
+        setLoadError(discoveryUi.loadError);
+        settleBootstrap();
+        return false;
+      }
+    };
+
+    const loadConversationCallsFallback = async () => {
+      try {
+        const nextCalls = await getUserConversationCalls(user.uid);
+        if (!isActive) {
+          return true;
+        }
+
+        resetListenerRetryState();
+        setConversationCalls(Array.isArray(nextCalls) ? nextCalls : []);
+        return true;
+      } catch (error) {
+        if (!isActive) {
+          return false;
+        }
+
+        console.error("Error loading conversation calls fallback:", error);
+        return false;
+      }
+    };
+
+    const startListeners = async () => {
+      try {
+        if (typeof user?.getIdToken === "function") {
+          await user.getIdToken();
+        }
+      } catch (error) {
         if (!isActive) {
           return;
         }
 
-        setMembers(Array.isArray(discoverableUsers) ? discoverableUsers : []);
+        if (scheduleListenerRetry(error)) {
+          return;
+        }
+
+        console.error("Error preparing messages auth token:", error);
+        const loadedFallback = await loadConversationsFallback();
+        if (loadedFallback) {
+          await loadConversationCallsFallback();
+          return;
+        }
+        return;
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      unsubscribeConversations = subscribeToUserConversations(
+        user.uid,
+        (nextConversations) => {
+          resetListenerRetryState();
+          setLoadError("");
+          setConversations(nextConversations);
+          settleBootstrap();
+        },
+        (error) => {
+          if (scheduleListenerRetry(error)) {
+            return;
+          }
+
+          console.error("Error subscribing to conversations:", error);
+          void loadConversationsFallback();
+        }
+      );
+
+      getDiscoverableUsersPage({
+        excludeUserId: user.uid,
+        limitCount: DIRECTORY_PAGE_SIZE,
       })
-      .catch((error) => {
-        console.error("Error loading member directory:", error);
-        if (!isActive) {
-          return;
+        .then((directoryPage) => {
+          if (!isActive) {
+            return;
+          }
+
+          setMembers(Array.isArray(directoryPage?.users) ? directoryPage.users : []);
+          setMemberDirectoryCursor(directoryPage?.nextCursor || null);
+          setHasMoreDirectoryMembers(Boolean(directoryPage?.hasMore));
+        })
+        .catch((error) => {
+          console.error("Error loading member directory:", error);
+          if (!isActive) {
+            return;
+          }
+        });
+
+      unsubscribeRequests = subscribeToUserConversationRequests(
+        user.uid,
+        (nextRequests) => {
+          setConversationRequests(nextRequests);
+        },
+        (error) => {
+          console.error("Error subscribing to conversation requests:", error);
         }
+      );
 
-        setLoadError((previous) => previous || discoveryUi.loadError);
-      });
+      unsubscribeBlockedUsers = subscribeToBlockedUsers(
+        user.uid,
+        (nextBlockedUserIds) => {
+          setBlockedUserIds(nextBlockedUserIds);
+        },
+        (error) => {
+          console.error("Error subscribing to blocked users:", error);
+        }
+      );
 
-    const unsubscribeRequests = subscribeToUserConversationRequests(
-      user.uid,
-      (nextRequests) => {
-        setConversationRequests(nextRequests);
-      },
-      (error) => {
-        console.error("Error subscribing to conversation requests:", error);
-        setLoadError((previous) => previous || discoveryUi.loadError);
-      }
-    );
+      unsubscribeConversationSafety = subscribeToUserConversationSafetySettings(
+        user.uid,
+        (nextSettings) => {
+          setConversationSafetySettings(nextSettings);
+        },
+        (error) => {
+          console.error("Error subscribing to conversation safety settings:", error);
+        }
+      );
 
-    const unsubscribeBlockedUsers = subscribeToBlockedUsers(
-      user.uid,
-      (nextBlockedUserIds) => {
-        setBlockedUserIds(nextBlockedUserIds);
-      },
-      (error) => {
-        console.error("Error subscribing to blocked users:", error);
-        setLoadError((previous) => previous || discoveryUi.loadError);
-      }
-    );
+      unsubscribeConversationCalls = subscribeToUserConversationCalls(
+        user.uid,
+        (nextCalls) => {
+          resetListenerRetryState();
+          setConversationCalls(nextCalls);
+        },
+        (error) => {
+          if (scheduleListenerRetry(error)) {
+            return;
+          }
 
-    const unsubscribeConversationSafety = subscribeToUserConversationSafetySettings(
-      user.uid,
-      (nextSettings) => {
-        setConversationSafetySettings(nextSettings);
-      },
-      (error) => {
-        console.error("Error subscribing to conversation safety settings:", error);
-        setLoadError((previous) => previous || discoveryUi.loadError);
-      }
-    );
+          console.error("Error subscribing to conversation calls:", error);
+          void loadConversationCallsFallback();
+        }
+      );
+    };
+
+    startListeners();
 
     return () => {
       isActive = false;
-      if (bootstrapTimeoutId && typeof window !== "undefined") {
-        window.clearTimeout(bootstrapTimeoutId);
-      }
+      clearBootstrapTimeout();
+      clearListenerRetryTimeout();
       unsubscribeConversations();
       unsubscribeRequests();
       unsubscribeBlockedUsers();
       unsubscribeConversationSafety();
+      unsubscribeConversationCalls();
     };
-  }, [discoveryUi.loadError, discoveryUi.loadTimeout, user]);
+  }, [authLoading, discoveryUi.loadError, discoveryUi.loadTimeout, listenerBootstrapRevision, user]);
+
+  useEffect(() => {
+    setConversationActionsOpen(false);
+  }, [selectedConversation?.id]);
+
+  useEffect(() => {
+    if (!requestedConversationId || !user?.uid) {
+      return;
+    }
+
+    const requestedConversation = conversations.find((conversation) => conversation.id === requestedConversationId);
+
+    if (!requestedConversation) {
+      return;
+    }
+
+    hideConversationForUser(user.uid, requestedConversation.id, false).catch(() => {});
+    setSelectedConversation((currentConversation) => (
+      currentConversation?.id === requestedConversation.id ? currentConversation : requestedConversation
+    ));
+
+    if (typeof window !== "undefined") {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("conversationId");
+      window.history.replaceState({}, "", nextUrl.toString());
+    }
+
+    setRequestedConversationId("");
+  }, [conversations, requestedConversationId, user?.uid]);
+
+  useEffect(() => {
+    if (!requestedMemberId || !user?.uid || loading) {
+      return;
+    }
+
+    const existing = conversations.find((conversation) =>
+      Array.isArray(conversation?.participants)
+      && conversation.participants.includes(requestedMemberId)
+      && conversation.participants.includes(user.uid)
+      && conversation.participants.length === 2
+    );
+
+    if (existing) {
+      hideConversationForUser(user.uid, existing.id, false).catch(() => {});
+      setSelectedConversation((current) => current?.id === existing.id ? current : existing);
+      setRequestedMemberId("");
+      if (typeof window !== "undefined") {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete("memberId");
+        window.history.replaceState({}, "", nextUrl.toString());
+      }
+    } else if (conversations.length > 0 || !loading) {
+      createConversation([user.uid, requestedMemberId])
+        .then((conversationId) => {
+          setRequestedConversationId(conversationId);
+        })
+        .catch((err) => {
+          console.error("Error creating conversation from memberId:", err);
+        })
+        .finally(() => {
+          setRequestedMemberId("");
+          if (typeof window !== "undefined") {
+            const nextUrl = new URL(window.location.href);
+            nextUrl.searchParams.delete("memberId");
+            window.history.replaceState({}, "", nextUrl.toString());
+          }
+        });
+    }
+  }, [conversations, requestedMemberId, user?.uid, loading]);
+
+  useEffect(() => {
+    if (!currentCallSession?.conversationId) {
+      return;
+    }
+
+    return subscribeToConversationCall(
+      currentCallSession.conversationId,
+      (nextCall) => {
+        if (!nextCall) {
+          setCurrentCallSession(null);
+          setCallDialogOpen(false);
+          openRequestDialog({
+            tone: "info",
+            title: discoveryUi.dialogInfoTitle,
+            message: discoveryUi.callEnded,
+          });
+          return;
+        }
+
+        if (["declined", "ended", "missed"].includes(nextCall.status)) {
+          setCurrentCallSession(null);
+          setCallDialogOpen(false);
+          if (nextCall.status === "missed") {
+            const callKey = `${nextCall.conversationId}:${getTimestampMillis(nextCall.missedAt || nextCall.updatedAt)}`;
+            handledMissedCallKeysRef.current.add(callKey);
+          }
+          openRequestDialog({
+            tone: "info",
+            title: discoveryUi.dialogInfoTitle,
+            message: nextCall.status === "declined"
+              ? discoveryUi.callDeclined
+              : nextCall.status === "missed"
+                ? (nextCall.calleeId === user?.uid ? discoveryUi.callMissed : discoveryUi.callNoAnswer)
+                : discoveryUi.callEnded,
+          });
+          return;
+        }
+
+        setCurrentCallSession(nextCall);
+      },
+      (error) => {
+        console.error("Error subscribing to current conversation call:", error);
+      }
+    );
+  }, [currentCallSession?.conversationId, discoveryUi.callDeclined, discoveryUi.callEnded, discoveryUi.callMissed, discoveryUi.callNoAnswer, discoveryUi.dialogInfoTitle, user?.uid]);
+
+  useEffect(() => {
+    handledMissedCallKeysRef.current = new Set();
+    sessionStartMsRef.current = Date.now();
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      return;
+    }
+
+    const missedCalls = conversationCalls.filter((call) => call.status === "missed");
+
+    missedCalls.forEach((call) => {
+      const callKey = `${call.conversationId}:${getTimestampMillis(call.missedAt || call.updatedAt)}`;
+      if (handledMissedCallKeysRef.current.has(callKey)) {
+        return;
+      }
+      handledMissedCallKeysRef.current.add(callKey);
+      const callMs = getTimestampMillis(call.missedAt || call.updatedAt);
+      if (callMs <= sessionStartMsRef.current) {
+        return;
+      }
+      openRequestDialog({
+        tone: "info",
+        title: discoveryUi.dialogInfoTitle,
+        message: call.calleeId === user.uid ? discoveryUi.callMissed : discoveryUi.callNoAnswer,
+      });
+    });
+  }, [conversationCalls, discoveryUi.callMissed, discoveryUi.callNoAnswer, discoveryUi.dialogInfoTitle, user?.uid]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !conversationActionsOpen) {
+      return;
+    }
+
+    function handleClickOutside(event) {
+      if (!conversationActionsRef.current?.contains(event.target)) {
+        setConversationActionsOpen(false);
+      }
+    }
+
+    window.addEventListener("mousedown", handleClickOutside);
+
+    return () => {
+      window.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [conversationActionsOpen]);
+
+  async function handleLoadMoreDirectoryMembers() {
+    if (!user?.uid || loadingMoreDirectoryMembers || !hasMoreDirectoryMembers || !memberDirectoryCursor) {
+      return;
+    }
+
+    setLoadingMoreDirectoryMembers(true);
+    try {
+      const nextDirectoryPage = await getDiscoverableUsersPage({
+        excludeUserId: user.uid,
+        limitCount: DIRECTORY_PAGE_SIZE,
+        cursor: memberDirectoryCursor,
+      });
+
+      setMembers((currentMembers) => {
+        const existingIds = new Set(currentMembers.map((member) => member.id));
+        const nextUniqueMembers = (nextDirectoryPage?.users || []).filter((member) => !existingIds.has(member.id));
+        return [...currentMembers, ...nextUniqueMembers];
+      });
+      setMemberDirectoryCursor(nextDirectoryPage?.nextCursor || null);
+      setHasMoreDirectoryMembers(Boolean(nextDirectoryPage?.hasMore));
+    } catch (error) {
+      console.error("Error loading more directory members:", error);
+      setLoadError((previous) => previous || discoveryUi.loadError);
+    } finally {
+      setLoadingMoreDirectoryMembers(false);
+    }
+  }
 
   useEffect(() => {
     if (!selectedConversation?.id || !user) {
@@ -956,6 +1429,14 @@ export default function MessagesPage() {
     return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   }
 
+  function getMissedCallLabel(call) {
+    if (!call || call.status !== "missed") {
+      return "";
+    }
+
+    return call.calleeId === user?.uid ? discoveryUi.callMissed : discoveryUi.callNoAnswer;
+  }
+
   function isParticipantTyping(conversation, participantId) {
     const typingState = conversation?.typingStatus?.[participantId];
     const typingUpdatedAt = getTimestampMillis(typingState?.updatedAt);
@@ -988,6 +1469,7 @@ export default function MessagesPage() {
 
   function getSafetyErrorMessage(error) {
     const message = String(error?.message || "").trim();
+    const code = String(error?.code || "").trim().toLowerCase();
 
     if (["blocked_user", "blocked_by_user"].includes(message)) {
       return discoveryUi.interactionBlocked;
@@ -1009,6 +1491,10 @@ export default function MessagesPage() {
       return discoveryUi.duplicateMessage;
     }
 
+    if (code === "permission-denied" || code === "firestore/permission-denied") {
+      return discoveryUi.requestError;
+    }
+
     return "";
   }
 
@@ -1018,6 +1504,152 @@ export default function MessagesPage() {
       tone,
       title,
       message,
+    });
+  }
+
+  async function handleStartCall() {
+    if (!selectedConversation?.id || !selectedConversationOtherId || !user?.uid) {
+      return;
+    }
+
+    const existingCall = conversationCalls.find(
+      (call) => call.conversationId === selectedConversation.id && ["ringing", "active"].includes(call.status)
+    );
+    if (existingCall) {
+      setCurrentCallSession(existingCall);
+      setCallDialogOpen(true);
+      return;
+    }
+
+    setCallActionLoading(`start:${selectedConversation.id}`);
+    try {
+      const nextCall = await startConversationCall({
+        conversationId: selectedConversation.id,
+        callerId: user.uid,
+        calleeId: selectedConversationOtherId,
+      });
+      setCurrentCallSession(nextCall);
+      setCallDialogOpen(true);
+    } catch (error) {
+      console.error("Error starting conversation call:", error);
+      openRequestDialog({
+        tone: "error",
+        title: discoveryUi.dialogErrorTitle,
+        message: discoveryUi.callConnectionError,
+      });
+    } finally {
+      setCallActionLoading("");
+    }
+  }
+
+  async function handleAcceptIncomingCall(callSession) {
+    if (!callSession?.conversationId || !user?.uid) {
+      return;
+    }
+
+    setCallActionLoading(`incoming:${callSession.conversationId}`);
+    try {
+      await acceptConversationCall(callSession.conversationId, user.uid);
+      const matchingConversation = conversations.find((conversation) => conversation.id === callSession.conversationId);
+      if (matchingConversation) {
+        setSelectedConversation(matchingConversation);
+      }
+      setCurrentCallSession({
+        ...callSession,
+        status: "active",
+        answeredBy: user.uid,
+      });
+      setCallDialogOpen(true);
+    } catch (error) {
+      console.error("Error accepting incoming call:", error);
+      openRequestDialog({
+        tone: "error",
+        title: discoveryUi.dialogErrorTitle,
+        message: discoveryUi.callConnectionError,
+      });
+    } finally {
+      setCallActionLoading("");
+    }
+  }
+
+  async function handleDeclineIncomingCall(callSession) {
+    if (!callSession?.conversationId || !user?.uid) {
+      return;
+    }
+
+    setCallActionLoading(`incoming:${callSession.conversationId}`);
+    try {
+      await declineConversationCall(callSession.conversationId, user.uid);
+      openRequestDialog({
+        tone: "info",
+        title: discoveryUi.dialogInfoTitle,
+        message: discoveryUi.callDeclined,
+      });
+    } catch (error) {
+      console.error("Error declining incoming call:", error);
+      openRequestDialog({
+        tone: "error",
+        title: discoveryUi.dialogErrorTitle,
+        message: discoveryUi.callConnectionError,
+      });
+    } finally {
+      setCallActionLoading("");
+    }
+  }
+
+  async function handleEndCurrentCall() {
+    const conversationId = String(currentCallSession?.conversationId || "").trim();
+    if (!conversationId || !user?.uid) {
+      setCallDialogOpen(false);
+      setCurrentCallSession(null);
+      return;
+    }
+
+    setCallActionLoading(`end:${conversationId}`);
+    try {
+      await endConversationCall(conversationId, user.uid);
+    } catch (error) {
+      console.error("Error ending current call:", error);
+    } finally {
+      setCallDialogOpen(false);
+      setCurrentCallSession(null);
+      setCallActionLoading("");
+    }
+  }
+
+  function resolveCallSetupErrorMessage(errorCode) {
+    if (errorCode === "agora_config_missing") {
+      return discoveryUi.callConfigMissingError;
+    }
+
+    if (errorCode === "agora_sdk_missing" || errorCode === "agora_sdk_unavailable") {
+      return discoveryUi.callSdkMissingError;
+    }
+
+    if (errorCode === "auth_required") {
+      return discoveryUi.callAuthRequiredError;
+    }
+
+    return discoveryUi.callConnectionError;
+  }
+
+  async function handleCallConnectionError(errorCode) {
+    const conversationId = String(currentCallSession?.conversationId || "").trim();
+
+    if (conversationId && user?.uid) {
+      try {
+        await endConversationCall(conversationId, user.uid);
+      } catch (error) {
+        console.error("Error cleaning up failed conversation call:", error);
+      }
+    }
+
+    setCallDialogOpen(false);
+    setCurrentCallSession(null);
+    openRequestDialog({
+      tone: "error",
+      title: discoveryUi.dialogErrorTitle,
+      message: resolveCallSetupErrorMessage(errorCode),
     });
   }
 
@@ -1038,29 +1670,30 @@ export default function MessagesPage() {
     setRequestingMemberId(targetUserId);
 
     try {
-      const result = await createConversationRequest({
-        fromUserId: user.uid,
-        toUserId: targetUserId,
-      });
+      const matchingConversation = conversations.find((conversation) => (
+        Array.isArray(conversation?.participants)
+        && conversation.participants.length === 2
+        && getOtherParticipant(conversation) === targetUserId
+      ));
 
-      if (result.status === "existing_conversation") {
-        if (result.conversationId) {
-          await hideConversationForUser(user.uid, result.conversationId, false);
-        }
-        const existingConversation = conversations.find((conversation) => conversation.id === result.conversationId);
-        if (existingConversation) {
-          setSelectedConversation(existingConversation);
-        }
-        setRequestedConversationId(result.conversationId || "");
-      } else {
-        openRequestDialog({
-          tone: result.status === "pending" ? "info" : "success",
-          title: result.status === "pending" ? discoveryUi.dialogInfoTitle : discoveryUi.dialogSuccessTitle,
-          message: result.status === "pending" ? discoveryUi.requestPending : discoveryUi.requestCreated,
-        });
+      const conversationId = matchingConversation?.id || await createConversation([user.uid, targetUserId]);
+
+      if (conversationId) {
+        await hideConversationForUser(user.uid, conversationId, false).catch(() => {});
       }
+
+      const nextConversation = conversations.find((conversation) => conversation.id === conversationId);
+      if (nextConversation) {
+        setSelectedConversation(nextConversation);
+      }
+      setRequestedConversationId(conversationId || "");
     } catch (error) {
-      console.error("Error creating conversation request:", error);
+      console.error("Error opening direct conversation:", {
+        message: String(error?.message || "").trim(),
+        code: String(error?.code || "").trim(),
+        stage: String(error?.conversationRequestStage || "").trim(),
+        cause: error?.cause || null,
+      });
       const safetyErrorMessage = getSafetyErrorMessage(error);
       openRequestDialog({
         tone: "error",
@@ -1122,6 +1755,19 @@ export default function MessagesPage() {
     }
   }
 
+  if (authLoading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Card className="w-full max-w-md rounded-3xl border-0 shadow-lg">
+          <CardContent className="p-8 text-center">
+            <MessageCircle className="mx-auto h-12 w-12 text-slate-300" />
+            <h1 className="mt-4 text-xl font-bold">{t("loadingConversations")}</h1>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (!user) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -1146,15 +1792,36 @@ export default function MessagesPage() {
   const conversationSafetyById = new Map(
     conversationSafetySettings.map((setting) => [setting.conversationId, setting])
   );
-  const visibleConversations = conversations.filter((conversation) => {
-    const safetyState = conversationSafetyById.get(conversation.id);
-    const otherParticipantId = getOtherParticipant(conversation);
-    return !safetyState?.hidden && !blockedUserIds.includes(otherParticipantId);
-  });
+  const visibleConversations = (() => {
+    const filtered = conversations.filter((conversation) => {
+      const safetyState = conversationSafetyById.get(conversation.id);
+      const otherParticipantId = getOtherParticipant(conversation);
+      return !safetyState?.hidden && !blockedUserIds.includes(otherParticipantId);
+    });
+    const deduped = new Map();
+    for (const conversation of filtered) {
+      const computedKey = conversation.participantsKey
+        || (Array.isArray(conversation.participants) && conversation.participants.length > 0
+          ? [...new Set(conversation.participants.filter(Boolean))].sort().join("__")
+          : null);
+      const key = computedKey || conversation.id;
+      const existing = deduped.get(key);
+      const currentHasMsg = Boolean(conversation.lastMessage);
+      const existingHasMsg = Boolean(existing?.lastMessage);
+      const currentTime = conversation.lastMessageTime?.toMillis?.() ?? conversation.lastMessageTime ?? 0;
+      const existingTime = existing?.lastMessageTime?.toMillis?.() ?? existing?.lastMessageTime ?? 0;
+      const shouldReplace = !existing
+        || (currentHasMsg && !existingHasMsg)
+        || (currentHasMsg && existingHasMsg && currentTime > existingTime);
+      if (shouldReplace) {
+        deduped.set(key, conversation);
+      }
+    }
+    return Array.from(deduped.values());
+  })();
   const visibleConversationRequests = conversationRequests.filter(
     (request) => !blockedUserIds.includes(getOtherRequestParticipant(request))
   );
-  const requestMap = new Map(visibleConversationRequests.map((request) => [getOtherRequestParticipant(request), request]));
   const allMembersWithPresence = [...members]
     .map((member) => ({
       ...member,
@@ -1169,6 +1836,41 @@ export default function MessagesPage() {
       return (a.name || "").localeCompare(b.name || "", "fr");
     });
   const directoryMembers = allMembersWithPresence.filter((member) => !member.profileHidden);
+  const normalizedSidebarSearchQuery = normalizeSearchTerm(sidebarSearchQuery);
+  const filteredConversationRequests = visibleConversationRequests.filter((request) => matchesSearchTerm(
+    normalizedSidebarSearchQuery,
+    [
+      getRequestDisplayName(request),
+      request.message,
+      request.itemInfo?.title,
+      request.requesterName,
+      request.recipientName,
+    ]
+  ));
+  const filteredVisibleConversations = visibleConversations.filter((conversation) => {
+    const otherParticipantId = getOtherParticipant(conversation);
+    const otherMember = allMembersWithPresence.find((member) => member.id === otherParticipantId);
+
+    return matchesSearchTerm(normalizedSidebarSearchQuery, [
+      getConversationDisplayName(conversation, otherMember),
+      conversation.lastMessage,
+      conversation.itemInfo?.title,
+      otherMember?.name,
+      otherMember?.city,
+      otherMember?.country,
+    ]);
+  });
+  const filteredDirectoryMembers = directoryMembers.filter((member) => matchesSearchTerm(
+    normalizedSidebarSearchQuery,
+    [
+      member.name,
+      member.displayName,
+      member.city,
+      member.country,
+      member.bio,
+      member.childAges,
+    ]
+  ));
   const membersById = new Map(allMembersWithPresence.map((member) => [member.id, member]));
   const onlineMembersCount = allMembersWithPresence.filter((member) => member.isOnline).length;
   const selectedConversationOtherId = selectedConversation ? getOtherParticipant(selectedConversation) : "";
@@ -1181,15 +1883,51 @@ export default function MessagesPage() {
       || ["restricted", "suspended"].includes(String(selectedConversationOtherMember?.moderationStatus || "").trim().toLowerCase())
     )
   );
-  const sidebarSectionClass = "rounded-[1.75rem] border border-slate-200 bg-slate-50/80 p-4 shadow-sm";
-  const sidebarSummaryCardClass = "rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-sm";
+  const selectedConversationCall = selectedConversation?.id
+    ? conversationCalls.find((call) => call.conversationId === selectedConversation.id && ["ringing", "active"].includes(call.status)) || null
+    : null;
+  const selectedConversationMissedCall = selectedConversation?.id
+    ? conversationCalls.find((call) => call.conversationId === selectedConversation.id && call.status === "missed") || null
+    : null;
+  const incomingConversationCall = conversationCalls.find(
+    (call) => call.status === "ringing" && call.calleeId === user?.uid
+  ) || null;
+  const incomingCallConversation = incomingConversationCall?.conversationId
+    ? conversations.find((conversation) => conversation.id === incomingConversationCall.conversationId) || null
+    : null;
+  const incomingCallOtherMember = incomingConversationCall?.callerId
+    ? membersById.get(incomingConversationCall.callerId)
+    : null;
+  const incomingCallDisplayName = incomingCallConversation
+    ? getConversationDisplayName(incomingCallConversation, incomingCallOtherMember)
+    : incomingCallOtherMember?.name || discoveryUi.callUnknownParticipant;
+  const currentCallConversation = currentCallSession?.conversationId
+    ? conversations.find((conversation) => conversation.id === currentCallSession.conversationId) || null
+    : null;
+  const currentCallOtherId = currentCallSession
+    ? (currentCallSession.participants || []).find((participantId) => participantId !== user?.uid) || ""
+    : "";
+  const currentCallOtherMember = currentCallOtherId ? membersById.get(currentCallOtherId) : null;
+  const currentCallDisplayName = currentCallConversation
+    ? getConversationDisplayName(currentCallConversation, currentCallOtherMember)
+    : currentCallOtherMember?.name || discoveryUi.callUnknownParticipant;
+  const selectedConversationSupportsCalling = Boolean(
+    selectedConversation
+    && (selectedConversation.participants || []).length === 2
+    && selectedConversationOtherId
+  );
+  const sidebarSectionClass = "rounded-[1.75rem] border border-[#eadbe8] bg-[linear-gradient(180deg,_rgba(255,255,255,0.96)_0%,_rgba(248,243,247,0.98)_100%)] p-4 shadow-[0_18px_50px_-42px_rgba(83,41,86,0.28)] backdrop-blur-sm";
+  const sidebarSummaryCardClass = "rounded-2xl border border-[#eadbe8] bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(247,242,247,0.98)_100%)] px-3 py-3 text-left shadow-[0_16px_36px_-28px_rgba(83,41,86,0.22)] transition-all hover:-translate-y-0.5 hover:border-[#efd1df] hover:shadow-[0_20px_44px_-28px_rgba(83,41,86,0.2)]";
+  const showRequestsSection = activeSidebarFilter === "all" || activeSidebarFilter === "requests";
+  const showDiscussionsSection = activeSidebarFilter === "all" || activeSidebarFilter === "discussions";
+  const showPeopleSection = activeSidebarFilter === "all" || activeSidebarFilter === "people";
 
   return (
     <>
-      <div className="flex h-[calc(100vh-8rem)] gap-4 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
+      <div className="flex min-h-0 h-[calc(100dvh-7rem)] flex-col gap-0 overflow-hidden rounded-[1.5rem] border border-[#eadbe8] bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(248,242,247,0.98)_100%)] shadow-[0_30px_90px_-50px_rgba(83,41,86,0.28)] sm:h-[calc(100dvh-8rem)] sm:rounded-[2rem] lg:flex-row lg:gap-4">
       {/* Conversations List */}
-      <div className={`w-full max-w-sm min-w-0 flex-col border-r border-slate-200 bg-white ${selectedConversation ? "hidden lg:flex" : "flex"}`}>
-        <div className="border-b border-slate-200 p-4">
+      <div className={`min-h-0 w-full min-w-0 flex-col bg-[linear-gradient(180deg,_rgba(252,248,251,0.98)_0%,_rgba(246,241,247,0.98)_100%)] lg:max-w-sm lg:border-r lg:border-[#eadbe8] ${selectedConversation ? "hidden lg:flex" : "flex"}`}>
+        <div className="border-b border-[#eadbe8] bg-white/70 p-4 backdrop-blur-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h1 className="font-display text-xl font-semibold">{t("messages")}</h1>
@@ -1197,33 +1935,55 @@ export default function MessagesPage() {
                 {onlineMembersCount} {discoveryUi.onlineNow}
               </p>
             </div>
-            <Badge variant="secondary" className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
-              {visibleConversations.length + visibleConversationRequests.length}
+            <Badge variant="secondary" className="rounded-full border border-[#efd7e3] bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(249,240,246,0.98)_100%)] px-3 py-1 text-[#7a284d] shadow-sm">
+              {filteredVisibleConversations.length + filteredConversationRequests.length}
             </Badge>
           </div>
 
+          <div className="relative mt-4">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              value={sidebarSearchQuery}
+              onChange={(event) => setSidebarSearchQuery(event.target.value)}
+              placeholder={discoveryUi.searchSidebarPlaceholder}
+              className="rounded-2xl border-[#eadbe8] bg-white pl-9"
+            />
+          </div>
+
           <div className="mt-4 grid grid-cols-3 gap-2">
-            <div className={sidebarSummaryCardClass}>
+            <button
+              type="button"
+              className={`${sidebarSummaryCardClass} ${activeSidebarFilter === "requests" ? "border-[#efc5d7] bg-[linear-gradient(180deg,_rgba(255,247,251,0.98)_0%,_rgba(247,238,245,0.98)_100%)] shadow-[0_20px_48px_-30px_rgba(155,35,53,0.22)]" : ""}`}
+              onClick={() => setActiveSidebarFilter((current) => current === "requests" ? "all" : "requests")}
+            >
               <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                 <Clock className="h-3.5 w-3.5" />
                 <span>{discoveryUi.requestsTitle}</span>
               </div>
-              <p className="mt-2 text-lg font-semibold text-slate-900">{visibleConversationRequests.length}</p>
-            </div>
-            <div className={sidebarSummaryCardClass}>
+              <p className="mt-2 text-lg font-semibold text-slate-900">{filteredConversationRequests.length}</p>
+            </button>
+            <button
+              type="button"
+              className={`${sidebarSummaryCardClass} ${activeSidebarFilter === "discussions" ? "border-[#efc5d7] bg-[linear-gradient(180deg,_rgba(255,247,251,0.98)_0%,_rgba(247,238,245,0.98)_100%)] shadow-[0_20px_48px_-30px_rgba(155,35,53,0.22)]" : ""}`}
+              onClick={() => setActiveSidebarFilter((current) => current === "discussions" ? "all" : "discussions")}
+            >
               <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                 <MessageCircle className="h-3.5 w-3.5" />
                 <span>{discoveryUi.discussionsTitle}</span>
               </div>
-              <p className="mt-2 text-lg font-semibold text-slate-900">{visibleConversations.length}</p>
-            </div>
-            <div className={sidebarSummaryCardClass}>
+              <p className="mt-2 text-lg font-semibold text-slate-900">{filteredVisibleConversations.length}</p>
+            </button>
+            <button
+              type="button"
+              className={`${sidebarSummaryCardClass} ${activeSidebarFilter === "people" ? "border-[#efc5d7] bg-[linear-gradient(180deg,_rgba(255,247,251,0.98)_0%,_rgba(247,238,245,0.98)_100%)] shadow-[0_20px_48px_-30px_rgba(155,35,53,0.22)]" : ""}`}
+              onClick={() => setActiveSidebarFilter((current) => current === "people" ? "all" : "people")}
+            >
               <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                 <User className="h-3.5 w-3.5" />
                 <span>{discoveryUi.membersTitle}</span>
               </div>
-              <p className="mt-2 text-lg font-semibold text-slate-900">{directoryMembers.length}</p>
-            </div>
+              <p className="mt-2 text-lg font-semibold text-slate-900">{filteredDirectoryMembers.length}</p>
+            </button>
           </div>
         </div>
         
@@ -1234,28 +1994,29 @@ export default function MessagesPage() {
             </div>
           ) : null}
 
+          {showRequestsSection ? (
           <div className={sidebarSectionClass}>
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-slate-400" />
                 <h2 className="text-sm font-semibold text-slate-800">{discoveryUi.requestsTitle}</h2>
               </div>
-              <Badge variant="secondary" className="rounded-full bg-white">{visibleConversationRequests.length}</Badge>
+              <Badge variant="secondary" className="rounded-full bg-white">{filteredConversationRequests.length}</Badge>
             </div>
 
-            {visibleConversationRequests.length === 0 ? (
+            {filteredConversationRequests.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
-                {discoveryUi.noRequests}
+                {normalizedSidebarSearchQuery ? discoveryUi.searchNoResults : discoveryUi.noRequests}
               </div>
             ) : (
               <div className="space-y-3">
-                {visibleConversationRequests.map((request) => {
+                {filteredConversationRequests.map((request) => {
                   const isIncoming = request.recipientId === user.uid;
                   const otherParticipantId = getOtherRequestParticipant(request);
                   const matchingConversation = allDirectConversationMap.get(otherParticipantId);
 
                   return (
-                    <div key={request.id} className="overflow-hidden rounded-2xl border border-slate-200 p-3">
+                    <div key={request.id} className="overflow-hidden rounded-2xl border border-[#eadbe8] bg-white/85 p-3 shadow-[0_16px_34px_-28px_rgba(83,41,86,0.18)] backdrop-blur-sm">
                       <div className="flex min-w-0 items-start gap-3">
                         <Avatar className="h-10 w-10">
                           <AvatarImage src={getRequestDisplayPhoto(request) || ""} />
@@ -1313,26 +2074,28 @@ export default function MessagesPage() {
               </div>
             )}
           </div>
+          ) : null}
 
+          {showDiscussionsSection ? (
           <div className={sidebarSectionClass}>
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <MessageCircle className="h-4 w-4 text-slate-400" />
                 <h2 className="text-sm font-semibold text-slate-800">{discoveryUi.discussionsTitle}</h2>
               </div>
-              <Badge variant="secondary" className="rounded-full bg-white">{visibleConversations.length}</Badge>
+              <Badge variant="secondary" className="rounded-full bg-white">{filteredVisibleConversations.length}</Badge>
             </div>
 
           {loading ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-center text-slate-400">{t("loadingConversations")}</div>
-          ) : visibleConversations.length === 0 ? (
+          ) : filteredVisibleConversations.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-6 text-center">
               <MessageCircle className="mx-auto h-10 w-10 text-slate-300" />
-              <p className="mt-2 text-sm text-slate-500">{t("noMessages")}</p>
+              <p className="mt-2 text-sm text-slate-500">{normalizedSidebarSearchQuery ? discoveryUi.searchNoResults : t("noMessages")}</p>
             </div>
           ) : (
             <div className="space-y-3">
-            {visibleConversations.map((conv) => {
+            {filteredVisibleConversations.map((conv) => {
               const otherId = getOtherParticipant(conv);
               const unreadCount = conv.unreadCount?.[user.uid] || 0;
               const isItemRelated = conv.itemInfo;
@@ -1341,13 +2104,29 @@ export default function MessagesPage() {
               const displayName = getConversationDisplayName(conv, otherMember);
               const displayPhoto = getConversationDisplayPhoto(conv, otherMember);
               const safetyState = conversationSafetyById.get(conv.id);
+              const conversationMissedCall = conversationCalls.find((call) => call.conversationId === conv.id && call.status === "missed") || null;
+              const showMissedCallPreview = Boolean(
+                conversationMissedCall
+                && getTimestampMillis(conversationMissedCall.missedAt || conversationMissedCall.updatedAt) >= getTimestampMillis(conv.lastMessageTime)
+              );
+              const conversationPreviewText = showMissedCallPreview
+                ? getMissedCallLabel(conversationMissedCall)
+                : (isOtherTyping ? discoveryUi.typingNow : (conv.lastMessage || t("startConversation")));
+              const conversationPreviewClass = showMissedCallPreview
+                ? "font-medium text-[#9B2335]"
+                : isOtherTyping
+                  ? "font-medium italic text-[#9B2335]"
+                  : "text-slate-500";
+              const conversationPreviewTime = showMissedCallPreview
+                ? (conversationMissedCall?.missedAt || conversationMissedCall?.updatedAt)
+                : conv.lastMessageTime;
               
               return (
                 <div
                   key={conv.id}
                   onClick={() => setSelectedConversation(conv)}
-                  className={`flex cursor-pointer gap-3 rounded-2xl border border-slate-200 bg-white p-4 transition-colors hover:bg-slate-50 ${
-                    selectedConversation?.id === conv.id ? "border-rose-200 bg-rose-50" : ""
+                  className={`flex cursor-pointer gap-3 rounded-2xl border border-[#eadbe8] bg-white/88 p-4 shadow-[0_16px_34px_-28px_rgba(83,41,86,0.16)] transition-all hover:-translate-y-0.5 hover:border-[#efd1df] hover:bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(250,244,248,0.98)_100%)] hover:shadow-[0_20px_44px_-28px_rgba(83,41,86,0.2)] ${
+                    selectedConversation?.id === conv.id ? "border-[#efc5d7] bg-[linear-gradient(180deg,_rgba(255,247,251,0.98)_0%,_rgba(247,238,245,0.98)_100%)] shadow-[0_20px_48px_-30px_rgba(155,35,53,0.22)]" : ""
                   }`}
                 >
                   <Avatar className="h-10 w-10">
@@ -1390,13 +2169,13 @@ export default function MessagesPage() {
                       {isItemRelated && (
                         <ShoppingBag className="h-3 w-3 text-slate-400" />
                       )}
-                      <p className={`truncate text-sm ${isOtherTyping ? "font-medium italic text-[#9B2335]" : "text-slate-500"}`}>
-                        {isOtherTyping ? discoveryUi.typingNow : (conv.lastMessage || t("startConversation"))}
+                      <p className={`truncate text-sm ${conversationPreviewClass}`}>
+                        {conversationPreviewText}
                       </p>
                     </div>
                     
                     <p className="mt-1 text-xs text-slate-400">
-                      {conv.lastMessageTime ? formatDate(conv.lastMessageTime) : ""}
+                      {conversationPreviewTime ? formatDate(conversationPreviewTime) : ""}
                     </p>
                   </div>
                 </div>
@@ -1405,31 +2184,32 @@ export default function MessagesPage() {
             </div>
           )}
           </div>
+          ) : null}
 
+          {showPeopleSection ? (
           <div className={sidebarSectionClass}>
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <User className="h-4 w-4 text-slate-400" />
                 <h2 className="text-sm font-semibold text-slate-800">{discoveryUi.membersTitle}</h2>
               </div>
-              <Badge variant="secondary" className="rounded-full bg-white">{directoryMembers.length}</Badge>
+              <Badge variant="secondary" className="rounded-full bg-white">{filteredDirectoryMembers.length}</Badge>
             </div>
 
-            {directoryMembers.length === 0 ? (
+            {filteredDirectoryMembers.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
-                {discoveryUi.memberListEmpty}
+                {normalizedSidebarSearchQuery ? discoveryUi.memberSearchEmpty : discoveryUi.memberListEmpty}
               </div>
             ) : (
-              <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
-                {directoryMembers.map((member) => {
+              <div className="max-h-[26rem] space-y-3 overflow-y-auto pr-1">
+                {filteredDirectoryMembers.map((member) => {
                   const matchingConversation = allDirectConversationMap.get(member.id);
-                  const pendingRequest = requestMap.get(member.id);
                   const matchingConversationSafety = matchingConversation
                     ? conversationSafetyById.get(matchingConversation.id)
                     : null;
 
                   return (
-                    <div key={member.id} className="overflow-hidden rounded-2xl border border-slate-200 p-3">
+                    <div key={member.id} className="overflow-hidden rounded-2xl border border-[#eadbe8] bg-white/88 p-3 shadow-[0_16px_34px_-28px_rgba(83,41,86,0.16)] backdrop-blur-sm">
                       <div className="flex min-w-0 items-start gap-3">
                         <Avatar className="h-10 w-10">
                           <AvatarImage src={member.photo || ""} />
@@ -1484,8 +2264,6 @@ export default function MessagesPage() {
                               <Button size="sm" className="h-auto w-full rounded-xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] whitespace-normal px-3 py-2 text-left" onClick={() => setSelectedConversation(matchingConversation)}>
                                 {discoveryUi.openConversation}
                               </Button>
-                            ) : pendingRequest ? (
-                              <Badge variant="secondary" className="w-fit max-w-full rounded-full">{discoveryUi.pending}</Badge>
                             ) : (
                               <Button
                                 size="sm"
@@ -1504,12 +2282,28 @@ export default function MessagesPage() {
                 })}
               </div>
             )}
+
+            {hasMoreDirectoryMembers ? (
+              <div className="mt-3 flex justify-center">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="rounded-xl"
+                  onClick={handleLoadMoreDirectoryMembers}
+                  disabled={loadingMoreDirectoryMembers}
+                >
+                  {loadingMoreDirectoryMembers ? discoveryUi.loadingPeople : discoveryUi.loadMorePeople}
+                </Button>
+              </div>
+            ) : null}
           </div>
+          ) : null}
         </div>
       </div>
 
       {/* Chat Area */}
-      <div className={`flex-1 flex-col bg-white ${selectedConversation ? "flex" : "hidden lg:flex"}`}>
+      <div className={`min-h-0 flex-1 flex-col bg-[linear-gradient(180deg,_rgba(254,252,254,0.96)_0%,_rgba(246,241,247,0.98)_100%)] ${selectedConversation ? "flex" : "hidden lg:flex"}`}>
       {selectedConversation ? (() => {
           const selectedConversationOtherId = getOtherParticipant(selectedConversation);
           const selectedConversationOtherMember = membersById.get(selectedConversationOtherId);
@@ -1525,8 +2319,8 @@ export default function MessagesPage() {
           return (
           <>
             {/* Chat Header */}
-            <div className="border-b p-4">
-              <div className="flex items-center gap-3">
+            <div className="border-b border-[#eadbe8] bg-white/78 p-3 backdrop-blur-sm sm:p-4">
+              <div className="flex items-start gap-3 sm:items-center">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -1565,59 +2359,98 @@ export default function MessagesPage() {
                   )}
                 </div>
 
-                <div className="flex flex-wrap justify-end gap-2">
+                <div className="flex shrink-0 items-start gap-2 sm:items-center">
+                  <div className="flex flex-wrap justify-end gap-2">
                   {selectedConversationSafety.muted && (
                     <Badge variant="secondary" className="rounded-full">{discoveryUi.mutedBadge}</Badge>
                   )}
                   {selectedConversationBlocked && (
                     <Badge variant="secondary" className="rounded-full">{discoveryUi.blockedBadge}</Badge>
                   )}
+                  {selectedConversationMissedCall && (
+                    <Badge variant="secondary" className="rounded-full border border-rose-200 bg-rose-50 text-rose-700">
+                      {getMissedCallLabel(selectedConversationMissedCall)}
+                    </Badge>
+                  )}
+                  </div>
                   <Button
                     type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-xl"
-                    onClick={() => handleToggleMute(selectedConversation.id, !selectedConversationSafety.muted)}
-                    disabled={safetyActionLoading === `mute:${selectedConversation.id}`}
+                    size="icon"
+                    variant={selectedConversationCall ? "default" : "outline"}
+                    className={`h-10 w-10 rounded-xl ${selectedConversationCall ? "bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] text-white" : "border-[#eadbe8] bg-white/90"}`}
+                    aria-label={discoveryUi.callAction}
+                    onClick={handleStartCall}
+                    disabled={callActionLoading === `start:${selectedConversation.id}` || (!selectedConversationCall && (!selectedConversationSupportsCalling || selectedConversationSendDisabled))}
                   >
-                    {selectedConversationSafety.muted ? discoveryUi.unmuteConversation : discoveryUi.muteConversation}
+                    <Phone className="h-4 w-4" />
                   </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-xl"
-                    onClick={() => handleToggleConversationVisibility(selectedConversation.id, true)}
-                    disabled={safetyActionLoading === `hide:${selectedConversation.id}`}
-                  >
-                    {discoveryUi.hideConversation}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-xl"
-                    onClick={() => handleReportUser(selectedConversationOtherId, selectedConversation.id)}
-                    disabled={safetyActionLoading === `report:${selectedConversationOtherId}`}
-                  >
-                    {discoveryUi.reportUser}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="rounded-xl"
-                    onClick={() => handleToggleBlock(selectedConversationOtherId, selectedConversationBlocked)}
-                    disabled={safetyActionLoading === `block:${selectedConversationOtherId}`}
-                  >
-                    {selectedConversationBlocked ? discoveryUi.unblock : discoveryUi.blocked}
-                  </Button>
+                  <div ref={conversationActionsRef} className="relative">
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="outline"
+                      className="h-10 w-10 rounded-xl border-[#eadbe8] bg-white/90"
+                      aria-label={discoveryUi.manageConversation}
+                      aria-expanded={conversationActionsOpen}
+                      onClick={() => setConversationActionsOpen((current) => !current)}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                    {conversationActionsOpen ? (
+                      <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-2xl border border-[#eadbe8] bg-[linear-gradient(180deg,_rgba(255,255,255,0.99)_0%,_rgba(248,243,247,0.99)_100%)] p-2 shadow-[0_24px_50px_-28px_rgba(83,41,86,0.28)]">
+                        <button
+                          type="button"
+                          className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-rose-50"
+                          onClick={() => {
+                            setConversationActionsOpen(false);
+                            handleToggleMute(selectedConversation.id, !selectedConversationSafety.muted);
+                          }}
+                          disabled={safetyActionLoading === `mute:${selectedConversation.id}`}
+                        >
+                          {selectedConversationSafety.muted ? discoveryUi.unmuteConversation : discoveryUi.muteConversation}
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-rose-50"
+                          onClick={() => {
+                            setConversationActionsOpen(false);
+                            handleToggleConversationVisibility(selectedConversation.id, true);
+                          }}
+                          disabled={safetyActionLoading === `hide:${selectedConversation.id}`}
+                        >
+                          {discoveryUi.hideConversation}
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-rose-50"
+                          onClick={() => {
+                            setConversationActionsOpen(false);
+                            handleReportUser(selectedConversationOtherId, selectedConversation.id);
+                          }}
+                          disabled={safetyActionLoading === `report:${selectedConversationOtherId}`}
+                        >
+                          {discoveryUi.reportUser}
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-rose-50"
+                          onClick={() => {
+                            setConversationActionsOpen(false);
+                            handleToggleBlock(selectedConversationOtherId, selectedConversationBlocked);
+                          }}
+                          disabled={safetyActionLoading === `block:${selectedConversationOtherId}`}
+                        >
+                          {selectedConversationBlocked ? discoveryUi.unblock : discoveryUi.blockAction}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch] bg-[radial-gradient(circle_at_top,_rgba(244,114,182,0.08),_transparent_26%),radial-gradient(circle_at_bottom_right,_rgba(96,165,250,0.08),_transparent_24%)] p-3 sm:p-4">
               {(selectedConversationBlocked || selectedConversationRestricted) && (
                 <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                   {selectedConversationBlocked ? discoveryUi.blockedConversationNotice : discoveryUi.messagingRestricted}
@@ -1650,10 +2483,10 @@ export default function MessagesPage() {
                         className={`flex ${isMe ? "justify-end" : "justify-start"}`}
                       >
                         <div
-                          className={`max-w-xs rounded-2xl px-4 py-2 lg:max-w-md ${
+                          className={`max-w-[85%] rounded-2xl px-4 py-2 sm:max-w-xs lg:max-w-md ${
                             isMe
-                              ? "bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] text-white"
-                              : "bg-slate-100 text-slate-800"
+                              ? "bg-[linear-gradient(135deg,_#9B2335_0%,_#7B1A2C_52%,_#5f1730_100%)] text-white shadow-[0_18px_38px_-24px_rgba(155,35,53,0.48)]"
+                              : "border border-[#eadbe8] bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(246,241,247,0.98)_100%)] text-slate-800 shadow-[0_16px_34px_-28px_rgba(83,41,86,0.18)]"
                           }`}
                         >
                           {/* Message content based on type */}
@@ -1707,7 +2540,7 @@ export default function MessagesPage() {
             </div>
 
             {/* Message Input */}
-            <div className="border-t p-4 space-y-3">
+            <div className="space-y-3 border-t border-[#eadbe8] bg-white/82 p-3 backdrop-blur-sm sm:p-4">
               {/* Image Share */}
               {showImageShare && (
                 <ImageShare 
@@ -1728,7 +2561,7 @@ export default function MessagesPage() {
               )}
 
               {showEmojiPicker && (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <div className="rounded-2xl border border-[#eadbe8] bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(247,242,247,0.98)_100%)] p-3 shadow-[0_16px_36px_-30px_rgba(83,41,86,0.18)]">
                   <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                     {discoveryUi.emojiPickerTitle}
                   </div>
@@ -1737,7 +2570,7 @@ export default function MessagesPage() {
                       <button
                         key={emoji}
                         type="button"
-                        className="flex h-10 items-center justify-center rounded-xl bg-white text-xl shadow-sm transition hover:scale-105 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex h-10 items-center justify-center rounded-xl border border-[#f0dfe8] bg-white text-xl shadow-sm transition hover:scale-105 hover:border-rose-200 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
                         onClick={() => handleInsertEmoji(emoji)}
                         disabled={sending || selectedConversationSendDisabled}
                         aria-label={`${discoveryUi.emojiPicker} ${emoji}`}
@@ -1750,12 +2583,12 @@ export default function MessagesPage() {
               )}
               
               {/* Message Input */}
-              <form onSubmit={handleSendMessage} className="flex gap-2">
+              <form onSubmit={handleSendMessage} className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#eadbe8] bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(248,243,247,0.98)_100%)] p-2 shadow-[0_18px_40px_-30px_rgba(83,41,86,0.18)] sm:flex-nowrap">
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => setShowImageShare(!showImageShare)}
-                  className="rounded-xl"
+                  className="rounded-xl border-[#e7d6e3] bg-white/90 hover:bg-rose-50"
                   disabled={sending || selectedConversationSendDisabled}
                 >
                   📷
@@ -1764,7 +2597,7 @@ export default function MessagesPage() {
                   type="button"
                   variant="outline"
                   onClick={() => setShowEmojiPicker((current) => !current)}
-                  className="rounded-xl"
+                  className="rounded-xl border-[#e7d6e3] bg-white/90 hover:bg-rose-50"
                   disabled={sending || selectedConversationSendDisabled}
                 >
                   <Smile className="h-4 w-4" />
@@ -1779,7 +2612,7 @@ export default function MessagesPage() {
                       setComposerFeedback(null);
                     }
                   }}
-                  className="flex-1 rounded-xl"
+                  className="min-w-0 flex-1 rounded-xl border-[#e7d6e3] bg-white/96"
                   disabled={sending || selectedConversationSendDisabled}
                 />
                 
@@ -1808,7 +2641,7 @@ export default function MessagesPage() {
         })() : (
           <div className="flex h-full items-center justify-center text-center">
             <div>
-              <MessageCircle className="mx-auto h-12 w-12 text-slate-300" />
+              <MessageCircle className="mx-auto h-12 w-12 text-rose-200" />
               <h3 className="mt-2 font-medium">{t("selectConversation")}</h3>
               <p className="text-sm text-slate-500">
                 {t("selectConversationDesc")}
@@ -1818,6 +2651,31 @@ export default function MessagesPage() {
         )}
       </div>
       </div>
+
+      <ActionDialog
+        open={Boolean(incomingConversationCall && !callDialogOpen)}
+        tone="info"
+        title={discoveryUi.incomingCallTitle}
+        message={`${incomingCallDisplayName} ${discoveryUi.incomingCallMessage}`}
+        confirmLabel={discoveryUi.callAccept}
+        cancelLabel={discoveryUi.callDecline}
+        closeLabel={t("close")}
+        loadingLabel={t("loading")}
+        loading={callActionLoading === `incoming:${incomingConversationCall?.conversationId || ""}`}
+        onClose={() => handleDeclineIncomingCall(incomingConversationCall)}
+        onConfirm={() => handleAcceptIncomingCall(incomingConversationCall)}
+      />
+
+      <AgoraAudioCallDialog
+        open={callDialogOpen && Boolean(currentCallSession?.conversationId)}
+        callSession={currentCallSession}
+        currentUserId={user?.uid || ""}
+        remoteParticipantName={currentCallDisplayName}
+        labels={discoveryUi}
+        onClose={handleEndCurrentCall}
+        onEndCall={handleEndCurrentCall}
+        onConnectionError={handleCallConnectionError}
+      />
 
       <ActionDialog
         open={safetyDialog.open}

@@ -92,7 +92,57 @@ service cloud.firestore {
     function isConversationParticipant(conversationId) {
       return signedIn()
         && exists(/databases/$(database)/documents/conversations/$(conversationId))
-        && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants.hasAny([uid()]);
+        && uid() in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+    }
+
+    function isConversationResourceParticipant() {
+      return signedIn()
+        && uid() in resource.data.participants;
+    }
+
+    function isConversationRequestParticipant() {
+      return signedIn()
+        && request.resource.data.participants is list
+        && uid() in request.resource.data.participants;
+    }
+
+    function requestPostGroupId() {
+      return request.resource.data.groupId is string ? request.resource.data.groupId : '';
+    }
+
+    function canCreateRequestedPost() {
+      return requestPostGroupId() == ''
+        || (
+          exists(/databases/$(database)/documents/groups/$(requestPostGroupId()))
+          && (
+            get(/databases/$(database)/documents/groups/$(requestPostGroupId())).data.members.hasAny([uid()])
+            || get(/databases/$(database)/documents/groups/$(requestPostGroupId())).data.memberUserIds.hasAny([uid()])
+          )
+        );
+    }
+
+    function resourcePostGroupId() {
+      return resource.data.groupId is string ? resource.data.groupId : '';
+    }
+
+    function canManageGroupPostPin() {
+      return resourcePostGroupId() != ''
+        && changedOnly(['pinned', 'isPinned', 'pinnedBy', 'pinnedAt', 'updatedAt'])
+        && request.resource.data.authorId == resource.data.authorId
+        && request.resource.data.groupId == resource.data.groupId
+        && request.resource.data.pinned == request.resource.data.isPinned
+        && (
+          request.resource.data.pinned
+            ? request.resource.data.pinnedBy == uid()
+            : request.resource.data.pinnedBy == null
+        )
+        && exists(/databases/$(database)/documents/groups/$(resourcePostGroupId()))
+        && (
+          get(/databases/$(database)/documents/groups/$(resourcePostGroupId())).data.adminIds.hasAny([uid()])
+          || get(/databases/$(database)/documents/groups/$(resourcePostGroupId())).data.moderatorIds.hasAny([uid()])
+          || get(/databases/$(database)/documents/groups/$(resourcePostGroupId())).data.ownerId == uid()
+          || get(/databases/$(database)/documents/groups/$(resourcePostGroupId())).data.createdBy == uid()
+        );
     }
 
     match /users/{userId} {
@@ -110,13 +160,47 @@ service cloud.firestore {
         ])
       );
       allow delete: if isAdmin();
+
+      match /notifications/{notificationId} {
+        allow read: if signedIn() && uid() == userId;
+        allow create: if isAdmin()
+          || (
+            signedIn()
+            && uid() != userId
+            && request.resource.data.type == 'group'
+            && request.resource.data.read == false
+            && request.resource.data.data is map
+            && request.resource.data.data.groupId is string
+            && request.resource.data.data.postId is string
+            && exists(/databases/$(database)/documents/posts/$(request.resource.data.data.postId))
+            && exists(/databases/$(database)/documents/groups/$(request.resource.data.data.groupId))
+            && get(/databases/$(database)/documents/posts/$(request.resource.data.data.postId)).data.authorId == uid()
+            && get(/databases/$(database)/documents/posts/$(request.resource.data.data.postId)).data.groupId == request.resource.data.data.groupId
+            && get(/databases/$(database)/documents/groups/$(request.resource.data.data.groupId)).data.members.hasAny([userId])
+          )
+          || (
+            signedIn()
+            && uid() != userId
+            && request.resource.data.type == 'chess'
+            && request.resource.data.read == false
+            && request.resource.data.data is map
+            && request.resource.data.data.gameId is string
+            && request.resource.data.data.senderId == uid()
+            && exists(/databases/$(database)/documents/chessGames/$(request.resource.data.data.gameId))
+            && get(/databases/$(database)/documents/chessGames/$(request.resource.data.data.gameId)).data.participants.hasAll([uid(), userId])
+          );
+        allow update, delete: if isAdmin() || (signedIn() && uid() == userId);
+      }
     }
 
     match /posts/{postId} {
       allow read: if signedIn();
-      allow create: if signedIn() && request.resource.data.authorId == uid();
+      allow create: if signedIn()
+        && request.resource.data.authorId == uid()
+        && canCreateRequestedPost();
       allow update: if isAdmin()
         || (signedIn() && resource.data.authorId == uid())
+        || (signedIn() && canManageGroupPostPin())
         || (
           signedIn()
           && changedOnly(['likesCount', 'commentsCount', 'reported', 'updatedAt'])
@@ -180,26 +264,30 @@ service cloud.firestore {
     }
 
     match /conversations/{conversationId} {
-      allow read: if isConversationParticipant(conversationId);
+      allow read: if isConversationResourceParticipant();
       allow create: if signedIn()
         && request.resource.data.participants is list
-        && request.resource.data.participants.hasAny([uid()])
+        && uid() in request.resource.data.participants
         && request.resource.data.participants.size() >= 2;
-      allow update: if isConversationParticipant(conversationId)
+      allow update: if isConversationResourceParticipant()
         && changedOnly([
           'lastMessage',
           'lastMessageSenderId',
           'lastMessageSenderName',
+          'lastMessageType',
           'lastMessageTime',
+          'participantNames',
           'typingStatus',
           'unreadCount',
+          'hiddenFor',
+          'mutedFor',
           'updatedAt'
         ]);
       allow delete: if false;
 
       match /messages/{messageId} {
         allow read: if isConversationParticipant(conversationId);
-        allow create: if isConversationParticipant(conversationId)
+        allow create: if signedIn()
           && request.resource.data.senderId == uid();
         allow update: if isConversationParticipant(conversationId)
           && resource.data.senderId != uid()
@@ -223,8 +311,81 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /conversationCalls/{conversationId} {
+      allow read: if isConversationResourceParticipant();
+      allow create: if isConversationParticipant(conversationId)
+        && request.resource.data.conversationId == conversationId
+        && request.resource.data.callerId == uid()
+        && request.resource.data.calleeId != uid()
+        && request.resource.data.participants is list
+        && request.resource.data.participants.hasAll([request.resource.data.callerId, request.resource.data.calleeId])
+        && isConversationRequestParticipant()
+        && request.resource.data.status == 'ringing';
+      allow update: if isConversationResourceParticipant()
+        && request.resource.data.conversationId == resource.data.conversationId
+        && request.resource.data.callerId == resource.data.callerId
+        && request.resource.data.calleeId == resource.data.calleeId
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.callType == resource.data.callType
+        && changedOnly([
+          'channelName',
+          'initiatedAt',
+          'status',
+          'answeredAt',
+          'answeredBy',
+          'declinedAt',
+          'declinedBy',
+          'missedAt',
+          'endedAt',
+          'endedBy',
+          'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /chessGames/{gameId} {
+      allow read: if signedIn() && uid() in resource.data.participants;
+      allow create: if signedIn()
+        && request.resource.data.hostId == uid()
+        && request.resource.data.guestId is string
+        && request.resource.data.guestId != uid()
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() == 2
+        && request.resource.data.participants.hasAll([request.resource.data.hostId, request.resource.data.guestId])
+        && request.resource.data.playerColorByUserId is map
+        && request.resource.data.playerColorByUserId[request.resource.data.hostId] == 'white'
+        && request.resource.data.playerColorByUserId[request.resource.data.guestId] == 'black';
+      allow update: if signedIn() && uid() in resource.data.participants
+        && request.resource.data.hostId == resource.data.hostId
+        && request.resource.data.guestId == resource.data.guestId
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.participantNames == resource.data.participantNames
+        && request.resource.data.playerColorByUserId == resource.data.playerColorByUserId
+        && changedOnly([
+          'board',
+          'turn',
+          'boardMessage',
+          'lastMove',
+          'status',
+          'updatedAt'
+        ]);
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if signedIn() && uid() in get(/databases/$(database)/documents/chessGames/$(gameId)).data.participants;
+        allow create: if signedIn()
+          && uid() in get(/databases/$(database)/documents/chessGames/$(gameId)).data.participants
+          && request.resource.data.senderId == uid()
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500;
+        allow update, delete: if false;
+      }
+    }
+
     match /userBlocks/{blockId} {
-      allow read, delete: if signedIn() && resource.data.userId == uid();
+      allow read: if signedIn() && (resource.data.userId == uid() || resource.data.targetUserId == uid());
+      allow delete: if signedIn() && resource.data.userId == uid();
       allow create: if signedIn() && request.resource.data.userId == uid();
       allow update: if false;
     }
@@ -238,19 +399,67 @@ service cloud.firestore {
     match /shopItems/{itemId} {
       allow read: if signedIn();
       allow create: if signedIn()
-        && (request.resource.data.authorId == uid() || request.resource.data.sellerId == uid());
-      allow update, delete: if isAdmin()
-        || (signedIn() && (resource.data.authorId == uid() || resource.data.sellerId == uid()));
+        && request.resource.data.authorId == uid()
+        && request.resource.data.sellerId == uid()
+        && request.resource.data.status == 'available';
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && (resource.data.authorId == uid() || resource.data.sellerId == uid())
+          && request.resource.data.authorId == resource.data.authorId
+          && request.resource.data.sellerId == resource.data.sellerId
+          && changedOnly([
+            'title',
+            'description',
+            'price',
+            'category',
+            'condition',
+            'sellerType',
+            'shopName',
+            'location',
+            'contact',
+            'moncashPhone',
+            'natcashPhone',
+            'sellerCoordinates',
+            'sellerLocationSource',
+            'images',
+            'authorName',
+            'updatedAt',
+            'status',
+            'soldAt'
+          ])
+          && (
+            !request.resource.data.diff(resource.data).changedKeys().hasAny(['status', 'soldAt'])
+            || (
+              resource.data.status != 'sold'
+              && request.resource.data.status == 'sold'
+              && request.resource.data.soldAt != null
+            )
+          )
+        );
+      allow delete: if isAdmin() || (signedIn() && (resource.data.authorId == uid() || resource.data.sellerId == uid()));
     }
 
     match /shopOrders/{orderId} {
       allow read: if isAdmin()
         || (signedIn() && (resource.data.buyerId == uid() || resource.data.sellerId == uid() || resource.data.authorId == uid()));
-      allow create: if signedIn() && request.resource.data.buyerId == uid();
+      allow create: if signedIn()
+        && request.resource.data.buyerId == uid()
+        && request.resource.data.buyerId != request.resource.data.sellerId
+        && (
+          !request.resource.data.keys().hasAny(['authorId'])
+          || request.resource.data.authorId == request.resource.data.sellerId
+        );
       allow update: if isAdmin()
         || (
           signedIn()
           && (resource.data.buyerId == uid() || resource.data.sellerId == uid() || resource.data.authorId == uid())
+          && request.resource.data.buyerId == resource.data.buyerId
+          && request.resource.data.sellerId == resource.data.sellerId
+          && request.resource.data.authorId == resource.data.authorId
+          && request.resource.data.itemId == resource.data.itemId
+          && request.resource.data.paymentStatus == resource.data.paymentStatus
+          && request.resource.data.status == resource.data.status
           && changedOnly([
             'requestedActionType',
             'actionRequestedBy',
@@ -259,12 +468,9 @@ service cloud.firestore {
             'refundRequestedAt',
             'supportStatus',
             'fulfillmentStatus',
-            'paymentProofStatus',
-            'paymentProofSource',
-            'paymentProofReference',
-            'paymentProofNote',
             'updatedAt'
           ])
+          && request.resource.data.actionRequestedBy == uid()
         );
       allow delete: if isAdmin();
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotifications } from "@/contexts/NotificationContext";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -8,16 +8,12 @@ import {
   createShopItem,
   deleteShopItem, 
   markItemSold,
-  createConversationRequest,
-  toggleFavorite,
-  isItemFavorite,
   searchShopItems,
   getBuyerShopOrders,
   getSellerShopOrders,
   getUserShopItems,
   requestShopOrderAction,
 } from "@/lib/firestore";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,14 +22,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import ActionDialog from "@/components/ui/action-dialog";
 import SearchFilters from "@/components/ui/SearchFilters";
-import PaymentForm from "@/components/PaymentForm";
+import { addItemToShopCart, getShopCartItems, subscribeToShopCartUpdates, syncShopCartWithAccount } from "@/lib/shopCart";
 import {
   ShoppingBag,
+  ShoppingCart,
   Plus,
   X,
   Tag,
-  MapPin,
-  Phone,
   Heart,
   Baby,
   Shirt,
@@ -46,12 +41,10 @@ import {
   CheckCircle2,
   ImageIcon,
   Search,
-  MessageCircle,
   Store,
   ArrowRight,
 } from "lucide-react";
 import ImageUpload from "@/components/ui/ImageUpload";
-import { RatingDisplay } from "@/components/ui/StarRating";
 
 const getCategories = (t) => [
   { id: "all", label: t("allCategories"), icon: Package },
@@ -73,7 +66,7 @@ const getConditionLabels = (t) => ({
 
 const conditionColors = {
   new: "bg-emerald-100 text-emerald-700",
-  "like-new": "bg-sky-100 text-sky-700",
+  "like-new": "bg-[#fff0f3] text-[#D63C54]",
   good: "bg-amber-100 text-amber-700",
   used: "bg-slate-100 text-slate-600",
 };
@@ -112,12 +105,11 @@ const SHOP_VISIBLE_STEP = 12;
 
 export default function BoutiquePage() {
   const { user, userProfile } = useAuth();
-  const { notifyFavorite, notifyItem, notifySystem } = useNotifications();
+  const { notifyItem, notifySystem } = useNotifications();
   const { t, language } = useLanguage();
   const categories = getCategories(t);
   const conditionLabels = getConditionLabels(t);
   const sellerTypeLabels = getSellerTypeLabels(language);
-  const router = useRouter();
   const sellerGpsText = language === "ht"
     ? {
         help: "Ajoute GPS ou pou ede kalkile frè livrezon yo pi byen.",
@@ -134,6 +126,23 @@ export default function BoutiquePage() {
         ready: "Position GPS du vendeur enregistrée.",
         unavailable: "Le GPS n'est pas disponible sur cet appareil.",
         denied: "Impossible de récupérer la position GPS. Vérifiez l'autorisation du navigateur.",
+      };
+  const cartText = language === "ht"
+    ? {
+        title: "Panier",
+        add: "Mete nan panier",
+        added: "Deja nan panier",
+        addedTitle: "Panier mete ajou",
+        addedMessage: "Atik la ajoute nan panier ou.",
+        alreadyMessage: "Atik sa a deja nan panier ou.",
+      }
+    : {
+        title: "Panier",
+        add: "Ajouter au panier",
+        added: "Déjà au panier",
+        addedTitle: "Panier mis à jour",
+        addedMessage: "L'article a été ajouté à votre panier.",
+        alreadyMessage: "Cet article est déjà dans votre panier.",
       };
   const operationsText = language === "ht"
     ? {
@@ -166,11 +175,13 @@ export default function BoutiquePage() {
         requestSentMessage: "Sipò a pral revize demann ou an rapidman.",
         requestErrorTitle: "Demann pa pase",
         requestErrorMessage: "Nou pa rive anrejistre demann lan. Tanpri eseye ankò.",
-        purchaseSuccessTitle: "Acha a anrejistre",
+        purchaseSuccessTitle: "Achat a anrejistre",
         purchaseSuccessMessage: "Konfimasyon ak fakti a byen prepare. Ou ka suiv kòmand sa a nan acha ou yo pi ba a.",
         purchasePendingMessage: "Peman an anrejistre. Ekip la oswa sistèm nan ap finalize verifikasyon kòmand sa a byento.",
         viewPurchase: "Gade acha mwen an",
         dismissPurchaseSuccess: "Fèmen mesaj la",
+        openHistory: "Acha ak vant mwen yo",
+        hideHistory: "Kache istwa a",
         latestReference: "Dènye referans",
         statusLabels: {
           pending: "An atant",
@@ -232,6 +243,8 @@ export default function BoutiquePage() {
         purchasePendingMessage: "Le paiement est enregistré. Le système ou l'équipe finalisera bientôt la vérification de cette commande.",
         viewPurchase: "Voir mon achat",
         dismissPurchaseSuccess: "Fermer le message",
+        openHistory: "Mes achats et ventes",
+        hideHistory: "Masquer l'historique",
         latestReference: "Dernière référence",
         statusLabels: {
           pending: "En attente",
@@ -262,16 +275,15 @@ export default function BoutiquePage() {
   const [availableShopNames, setAvailableShopNames] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [showPayment, setShowPayment] = useState(false);
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [favorites, setFavorites] = useState({});
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [loadingError, setLoadingError] = useState("");
   const [buyerOrders, setBuyerOrders] = useState([]);
   const [sellerOrders, setSellerOrders] = useState([]);
   const [sellerItems, setSellerItems] = useState([]);
-  const [recentPurchase, setRecentPurchase] = useState(null);
   const [activityLoading, setActivityLoading] = useState(false);
   const [orderActionLoading, setOrderActionLoading] = useState("");
+  const [cartItemIds, setCartItemIds] = useState([]);
+  const [cartCount, setCartCount] = useState(0);
   const [shopQueryLimit, setShopQueryLimit] = useState(SHOP_QUERY_PAGE_SIZE);
   const [visibleItemCount, setVisibleItemCount] = useState(SHOP_VISIBLE_STEP);
   const [filters, setFilters] = useState({
@@ -323,23 +335,7 @@ export default function BoutiquePage() {
         contactTitle: "Conversation",
       };
 
-  useEffect(() => {
-    loadItems();
-  }, []);
-
-  useEffect(() => {
-    if (!user?.uid) {
-      setBuyerOrders([]);
-      setSellerOrders([]);
-      setSellerItems([]);
-      setRecentPurchase(null);
-      return;
-    }
-
-    loadShopActivity(user.uid);
-  }, [user?.uid]);
-
-  async function loadItems(nextFilters = filters, requestedLimit = shopQueryLimit) {
+  const loadItems = useCallback(async (nextFilters = filters, requestedLimit = shopQueryLimit) => {
     setLoading(true);
     try {
       const data = await searchShopItems({
@@ -367,7 +363,50 @@ export default function BoutiquePage() {
       setLoadingError(operationsText.loadError);
     }
     setLoading(false);
-  }
+  }, [filters, operationsText.loadError, shopQueryLimit]);
+
+  useEffect(() => {
+    loadItems();
+  }, [loadItems]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setBuyerOrders([]);
+      setSellerOrders([]);
+      setSellerItems([]);
+      setShowHistoryPanel(false);
+      return;
+    }
+
+    loadShopActivity(user.uid);
+  }, [user?.uid]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    function syncCart(nextItems = getShopCartItems(user?.uid)) {
+      if (!isActive) {
+        return;
+      }
+
+      const nextIds = nextItems.map((item) => item.id).filter(Boolean);
+      setCartItemIds(nextIds);
+      setCartCount(nextIds.length);
+    }
+
+    async function hydrateCart() {
+      const nextItems = user?.uid ? await syncShopCartWithAccount(user.uid) : getShopCartItems();
+      syncCart(nextItems);
+    }
+
+    hydrateCart();
+
+    const unsubscribe = subscribeToShopCartUpdates(syncCart, user?.uid);
+    return () => {
+      isActive = false;
+      unsubscribe();
+    };
+  }, [user?.uid]);
 
   function handleSearchItems(nextFilters = filters) {
     setVisibleItemCount(SHOP_VISIBLE_STEP);
@@ -406,13 +445,41 @@ export default function BoutiquePage() {
     }
   }
 
+  async function handleAddToCart(item) {
+    if (!item?.id || item.authorId === user?.uid || String(item.status || "available").trim().toLowerCase() !== "available") {
+      return;
+    }
+
+    const result = await addItemToShopCart({
+      id: item.id,
+      title: item.title || item.name,
+      price: item.price,
+      imageUrl: item.images?.[0]?.url,
+      condition: item.condition,
+      sellerName: item.authorName,
+      shopName: item.shopName,
+      status: item.status,
+    }, {
+      userId: user?.uid,
+    });
+
+    notifySystem(
+      cartText.addedTitle,
+      result.alreadyExists ? cartText.alreadyMessage : cartText.addedMessage
+    );
+  }
+
   function scrollToBuyerHistory() {
+    setShowHistoryPanel(true);
+
     if (typeof document === "undefined") {
       return;
     }
 
-    const buyerHistorySection = document.getElementById("boutique-buyer-history");
-    buyerHistorySection?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => {
+      const buyerHistorySection = document.getElementById("boutique-buyer-history");
+      buyerHistorySection?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 160);
   }
 
   async function handleSubmit(e) {
@@ -524,151 +591,6 @@ export default function BoutiquePage() {
     }
   }
 
-  async function handleContact(item) {
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    try {
-      const result = await createConversationRequest({
-        fromUserId: user.uid,
-        toUserId: item.authorId,
-        itemInfo: {
-          type: "boutique",
-          itemId: item.id,
-          title: item.title || item.name,
-          price: item.price,
-          imageUrl: item.images?.[0]?.url,
-        },
-      });
-
-      if (result.status === "existing_conversation") {
-        router.push(`/messages?conversationId=${result.conversationId}`);
-      } else {
-        router.push("/messages");
-      }
-    } catch (e) {
-      console.error("Error requesting conversation:", e);
-      setDialogState({
-        open: true,
-        tone: "error",
-        title: boutiqueDialogText.contactTitle,
-        message: t("conversationError"),
-      });
-    }
-  }
-
-  // Payment functions
-  function handlePurchase(item) {
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    // Always open payment modal - let PaymentForm handle the logic
-    setSelectedItem(item);
-    setShowPayment(true);
-  }
-
-  async function handlePaymentSuccess(paymentData) {
-    const purchasedItem = selectedItem;
-    const fallbackPaymentStatus = normalizeStatusValue(paymentData?.status, "pending");
-
-    setShowPayment(false);
-    setSelectedItem(null);
-
-    try {
-      await loadItems();
-
-      let matchedOrder = null;
-
-      if (user?.uid) {
-        const refreshedActivity = await loadShopActivity(user.uid);
-        const buyerOrdersList = Array.isArray(refreshedActivity?.buyerOrders) ? refreshedActivity.buyerOrders : [];
-        matchedOrder = buyerOrdersList.find((order) => {
-          const orderReference = order.paymentProofReference || order.referenceNumber || "";
-          return order.transactionId === paymentData?.transactionId || orderReference === paymentData?.referenceNumber;
-        }) || buyerOrdersList[0] || null;
-      }
-
-      if (matchedOrder || paymentData || purchasedItem) {
-        const resolvedPaymentStatus = normalizeStatusValue(matchedOrder?.paymentStatus || paymentData?.status, "pending");
-        setRecentPurchase({
-          id: matchedOrder?.id || paymentData?.transactionId || paymentData?.referenceNumber || `${Date.now()}`,
-          itemTitle: matchedOrder?.itemTitle || paymentData?.itemName || purchasedItem?.title || purchasedItem?.name || t("item"),
-          paymentStatus: resolvedPaymentStatus,
-          reference: matchedOrder?.paymentProofReference || matchedOrder?.referenceNumber || paymentData?.referenceNumber || paymentData?.transactionId || "-",
-          orderId: matchedOrder?.id || "",
-        });
-        notifySystem(
-          operationsText.purchaseSuccessTitle,
-          resolvedPaymentStatus === "completed" ? operationsText.purchaseSuccessMessage : operationsText.purchasePendingMessage
-        );
-        return;
-      }
-    } catch (error) {
-      console.error("Error finalizing payment success flow:", error);
-    }
-
-    if (paymentData || purchasedItem) {
-      setRecentPurchase({
-        id: paymentData?.transactionId || paymentData?.referenceNumber || `${Date.now()}`,
-        itemTitle: paymentData?.itemName || purchasedItem?.title || purchasedItem?.name || t("item"),
-        paymentStatus: fallbackPaymentStatus,
-        reference: paymentData?.referenceNumber || paymentData?.transactionId || "-",
-        orderId: "",
-      });
-    }
-
-    notifySystem(
-      operationsText.purchaseSuccessTitle,
-      fallbackPaymentStatus === "completed" ? operationsText.purchaseSuccessMessage : operationsText.purchasePendingMessage
-    );
-  }
-
-  async function handleToggleFavorite(itemId) {
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    try {
-      const isFav = await toggleFavorite(user.uid, itemId);
-      setFavorites(prev => ({ ...prev, [itemId]: isFav }));
-      
-      // Send notification if favorited
-      if (isFav) {
-        const item = items.find(i => i.id === itemId);
-        if (item && item.authorId !== user.uid) {
-          notifyFavorite(item.title, userProfile?.name || user.displayName || "Anonim");
-        }
-      }
-    } catch (e) {
-      console.error("Error toggling favorite:", e);
-    }
-  }
-
-  async function checkFavorites() {
-    if (!user) return;
-    
-    const favStatus = {};
-    for (const item of items) {
-      try {
-        favStatus[item.id] = await isItemFavorite(user.uid, item.id);
-      } catch (e) {
-        favStatus[item.id] = false;
-      }
-    }
-    setFavorites(favStatus);
-  }
-
-  useEffect(() => {
-    if (items.length > 0 && user) {
-      checkFavorites();
-    }
-  }, [items, user]);
-
   async function handleMarkSold(itemId) {
     try {
       await markItemSold(itemId);
@@ -693,7 +615,7 @@ export default function BoutiquePage() {
     }
 
     if (["failed", "cancelled"].includes(key)) {
-      return { key, label: operationsText.statusLabels[key], className: "bg-rose-100 text-rose-700" };
+      return { key, label: operationsText.statusLabels[key], className: "bg-red-100 text-red-700" };
     }
 
     return { key, label: operationsText.statusLabels.pending, className: "bg-amber-100 text-amber-700" };
@@ -707,7 +629,7 @@ export default function BoutiquePage() {
       : ["cancelled", "refunded", "refund_requested"].includes(key)
         ? "bg-slate-200 text-slate-700"
         : key === "in_delivery" || key === "preparing"
-          ? "bg-sky-100 text-sky-700"
+          ? "bg-[#fff0f3] text-[#D63C54]"
           : "bg-amber-100 text-amber-700";
 
     return {
@@ -725,7 +647,7 @@ export default function BoutiquePage() {
       : key === "refunded"
         ? "bg-slate-200 text-slate-700"
         : key === "action_required"
-          ? "bg-rose-100 text-rose-700"
+          ? "bg-red-100 text-red-700"
           : key === "monitoring"
             ? "bg-amber-100 text-amber-700"
             : "bg-slate-100 text-slate-600";
@@ -745,9 +667,9 @@ export default function BoutiquePage() {
     const className = key === "verified"
       ? "bg-emerald-100 text-emerald-700"
       : key === "provided"
-        ? "bg-sky-100 text-sky-700"
+        ? "bg-[#fff0f3] text-[#D63C54]"
         : key === "rejected"
-          ? "bg-rose-100 text-rose-700"
+          ? "bg-red-100 text-red-700"
           : key === "missing"
             ? "bg-slate-200 text-slate-700"
             : "bg-amber-100 text-amber-700";
@@ -838,29 +760,114 @@ export default function BoutiquePage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 rounded-[2.5rem] bg-[radial-gradient(circle_at_top,_rgba(214,60,84,0.08),_transparent_28%),linear-gradient(180deg,_rgba(255,250,251,0.99)_0%,_rgba(255,246,247,0.98)_42%,_rgba(255,255,255,1)_100%)] p-3 sm:p-4 lg:p-5">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#9B2335] to-[#6B1525] shadow-lg shadow-rose-200">
-            <ShoppingBag className="h-6 w-6 text-white" />
-          </div>
-          <div>
-            <h1 className="font-display text-2xl font-semibold tracking-tight">{t("boutiqueTitle")}</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              {t("boutiqueDesc")}
-            </p>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,0.9fr)]">
+        <div className="relative overflow-hidden rounded-[2.2rem] border border-[#f0d8dc] bg-[linear-gradient(135deg,_rgba(255,255,255,0.99)_0%,_rgba(255,244,246,0.98)_52%,_rgba(252,237,240,0.96)_100%)] p-5 shadow-[0_26px_72px_-42px_rgba(214,60,84,0.2)] sm:p-7">
+          <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-[radial-gradient(circle_at_center,_rgba(214,60,84,0.14),_transparent_62%)] lg:block" />
+          <div className="relative">
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/90 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-[#D63C54] shadow-sm backdrop-blur">
+              <Search className="h-3.5 w-3.5" />
+              {t("marketplace")}
+            </div>
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[1.35rem] bg-gradient-to-br from-[#F04A64] via-[#D63C54] to-[#B91C3C] shadow-[0_20px_44px_-18px_rgba(214,60,84,0.42)]">
+                <ShoppingBag className="h-7 w-7 text-white" />
+              </div>
+              <div>
+                <h1 className="font-display text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+                  {t("boutiqueTitle")}
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
+                  {t("boutiqueDesc")}
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-[1.4rem] border border-white/90 bg-white/88 px-4 py-3 text-sm text-slate-600 shadow-sm backdrop-blur">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#D63C54]">
+                  {language === "ht" ? "Katalòg" : "Catalogue"}
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{filteredItems.length}</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {language === "ht" ? "atik disponib" : filteredItems.length > 1 ? "articles disponibles" : "article disponible"}
+                </div>
+              </div>
+              <div className="rounded-[1.4rem] border border-white/90 bg-white/88 px-4 py-3 text-sm text-slate-600 shadow-sm backdrop-blur">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#D63C54]">
+                  {language === "ht" ? "Patnè" : "Partenaires"}
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{affiliateShopCards.length}</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {language === "ht" ? "boutik patnè" : affiliateShopCards.length > 1 ? "boutiques partenaires" : "boutique partenaire"}
+                </div>
+              </div>
+              <div className="rounded-[1.4rem] border border-white/90 bg-white/88 px-4 py-3 text-sm text-slate-600 shadow-sm backdrop-blur">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#D63C54]">
+                  {user ? operationsText.buyerHistory : t("securePayment")}
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{user ? buyerOrders.length : visibleItems.length}</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {user
+                    ? language === "ht"
+                      ? "acha resan"
+                      : "achats récents"
+                    : language === "ht"
+                      ? "peyman pwoteje"
+                      : "paiement protégé"}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        {user && (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
           <Button
-            onClick={() => setShowForm(!showForm)}
-            className="rounded-2xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] shadow-sm shadow-rose-300 transition-all hover:shadow-md hover:brightness-110"
+            asChild
+            variant="outline"
+            className="h-auto w-full rounded-[1.7rem] border-[#f0d8dc] bg-white/92 px-5 py-5 text-sm font-medium text-[#D63C54] shadow-[0_12px_28px_-24px_rgba(214,60,84,0.14)] transition-all hover:bg-white"
           >
-            {showForm ? <X className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />}
-            {showForm ? t("reset") : t("sellItem")}
+            <Link href="/boutique/panier">
+              <ShoppingCart className="mr-2 h-4 w-4" />
+              {cartText.title}
+              <span className="ml-2 rounded-full bg-[#D63C54]/10 px-2 py-0.5 text-xs text-[#D63C54]">
+                {cartCount}
+              </span>
+            </Link>
           </Button>
-        )}
+          {user ? (
+            <Button
+              onClick={() => setShowForm(!showForm)}
+              className="h-auto w-full rounded-[1.7rem] bg-gradient-to-r from-[#F04A64] to-[#C81E3A] px-5 py-5 text-sm shadow-[0_22px_52px_-24px_rgba(214,60,84,0.4)] transition-all hover:-translate-y-0.5 hover:brightness-105"
+            >
+              {showForm ? <X className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />}
+              {showForm ? t("reset") : t("sellItem")}
+            </Button>
+          ) : null}
+          {user ? (
+            <Button
+              variant="outline"
+              onClick={() => setShowHistoryPanel((prev) => !prev)}
+              className="h-auto w-full rounded-[1.7rem] border-[#f0d8dc] bg-white/92 px-5 py-5 text-sm font-medium text-[#D63C54] shadow-sm transition-all hover:bg-white"
+            >
+              <Store className="mr-2 h-4 w-4" />
+              {showHistoryPanel ? operationsText.hideHistory : operationsText.openHistory}
+              <span className="ml-2 rounded-full bg-[#D63C54]/10 px-2 py-0.5 text-xs text-[#D63C54]">
+                {buyerOrders.length + sellerOrders.length}
+              </span>
+            </Button>
+          ) : null}
+          <div className="rounded-[2rem] border border-white/90 bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(255,246,247,0.96)_100%)] p-5 shadow-[0_22px_52px_-34px_rgba(214,60,84,0.16)] backdrop-blur xl:p-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#D63C54]/10 text-[#D63C54]">
+                <Store className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-900">{operationsText.operationsTitle}</div>
+                <div className="mt-1 text-xs leading-5 text-slate-500">{operationsText.operationsDesc}</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Search Filters */}
@@ -871,49 +878,8 @@ export default function BoutiquePage() {
         shopOptions={availableShopNames}
       />
 
-      {recentPurchase && user && (
-        <Card className="overflow-hidden rounded-[2rem] border-0 bg-gradient-to-r from-emerald-50 via-white to-teal-50 shadow-sm">
-          <CardContent className="p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex items-start gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
-                  <CheckCircle2 className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">{operationsText.purchaseSuccessTitle}</h2>
-                  <p className="mt-1 text-sm text-slate-600">
-                    {recentPurchase.paymentStatus === "completed"
-                      ? operationsText.purchaseSuccessMessage
-                      : operationsText.purchasePendingMessage}
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                    <Badge className="rounded-full bg-white text-slate-700 border border-emerald-100">{recentPurchase.itemTitle}</Badge>
-                    <Badge className="rounded-full bg-amber-50 text-amber-700 border border-amber-100">
-                      {operationsText.payment}: {operationsText.statusLabels[recentPurchase.paymentStatus] || recentPurchase.paymentStatus}
-                    </Badge>
-                    <Badge className="rounded-full bg-white text-slate-700 border border-slate-200">
-                      {operationsText.latestReference}: {recentPurchase.reference}
-                    </Badge>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Button className="rounded-2xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C]" onClick={scrollToBuyerHistory}>
-                  {operationsText.viewPurchase}
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-                <Button variant="outline" className="rounded-2xl" onClick={() => setRecentPurchase(null)}>
-                  {operationsText.dismissPurchaseSuccess}
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {user && (
-        <Card className="overflow-hidden rounded-[2rem] border-0 bg-gradient-to-br from-slate-50 via-white to-rose-50 shadow-sm">
+      {user && showHistoryPanel && (
+        <Card className="overflow-hidden rounded-[2rem] border border-white/90 bg-[linear-gradient(135deg,_rgba(255,255,255,0.99)_0%,_rgba(255,247,248,0.98)_55%,_rgba(255,242,245,0.97)_100%)] shadow-[0_20px_44px_-34px_rgba(214,60,84,0.08)]">
           <CardContent className="p-6">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
@@ -921,29 +887,29 @@ export default function BoutiquePage() {
                 <p className="mt-1 text-sm text-slate-500">{operationsText.operationsDesc}</p>
               </div>
               {user?.uid && (
-                <Link href={`/reviews/${user.uid}`} className="text-sm font-medium text-[#9B2335] hover:underline">
+                <Link href={`/reviews/${user.uid}`} className="text-sm font-medium text-[#D63C54] hover:underline">
                   {t("reviews")}
                 </Link>
               )}
             </div>
 
             <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="rounded-[1.5rem] border border-white/90 bg-white p-4 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{operationsText.activeListings}</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{activeSellerItemsCount}</div>
               </div>
-              <div className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="rounded-[1.5rem] border border-white/90 bg-white p-4 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{operationsText.salesOrders}</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{sellerOrders.length}</div>
               </div>
-              <div className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="rounded-[1.5rem] border border-white/90 bg-white p-4 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{operationsText.confirmedSales}</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{settledSellerOrders.length}</div>
               </div>
-              <div className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="rounded-[1.5rem] border border-white/90 bg-white p-4 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{operationsText.sellerRevenue}</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{formatShopMoney(sellerRevenue)}</div>
-                <div className="mt-1 text-xs text-rose-600">{operationsText.actionRequired}: {sellerActionRequiredCount}</div>
+                <div className="mt-1 text-xs text-[#D63C54]">{operationsText.actionRequired}: {sellerActionRequiredCount}</div>
               </div>
             </div>
 
@@ -958,7 +924,7 @@ export default function BoutiquePage() {
                   </div>
 
                   {buyerOrders.length === 0 ? (
-                    <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white/80 p-5 text-sm text-slate-500">
+                    <div className="rounded-[1.5rem] border border-dashed border-[#f0d8dc] bg-white p-5 text-sm text-slate-500 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
                       {operationsText.noPurchases}
                     </div>
                   ) : (
@@ -971,14 +937,14 @@ export default function BoutiquePage() {
                       const canRequestCancel = !isActionPending && ["pending"].includes(paymentMeta.key);
                       const canRequestRefund = !isActionPending && paymentMeta.key === "completed" && !["refunded", "cancelled"].includes(fulfillmentMeta.key);
                       return (
-                        <div key={order.id} className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
-                          <div className="flex items-start justify-between gap-3">
+                        <div key={order.id} className="rounded-[1.5rem] border border-white/90 bg-white p-4 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                               <div className="text-sm font-semibold text-slate-900">{order.itemTitle || t("item")}</div>
                               <div className="mt-1 text-xs text-slate-500">{operationsText.orderDate}: {formatOrderDate(order.createdAt)}</div>
                             </div>
-                            <div className="text-right">
-                              <div className="text-sm font-semibold text-[#9B2335]">{formatShopMoney(order.totalAmount || order.itemPrice)}</div>
+                            <div className="sm:text-right">
+                              <div className="text-sm font-semibold text-[#D63C54]">{formatShopMoney(order.totalAmount || order.itemPrice)}</div>
                               <div className="mt-1 text-xs text-slate-500">{operationsText.seller}: {order.sellerId ? <Link href={`/reviews/${order.sellerId}`} className="hover:underline">{order.sellerName || "-"}</Link> : order.sellerName || "-"}</div>
                             </div>
                           </div>
@@ -997,13 +963,13 @@ export default function BoutiquePage() {
 
                           <div className="mt-3 flex flex-wrap gap-2">
                             {isActionPending && (
-                              <Badge className="rounded-full bg-amber-100 text-amber-700">{operationsText.actionPending}</Badge>
+                              <Badge className="rounded-full bg-[#fff0f3] text-[#D63C54]">{operationsText.actionPending}</Badge>
                             )}
                             {canRequestCancel && (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="rounded-xl"
+                                className="rounded-xl border-[#f0d8dc] bg-white shadow-[0_10px_22px_-20px_rgba(214,60,84,0.06)] transition-all hover:bg-white"
                                 disabled={orderActionLoading === `${order.id}:cancel`}
                                 onClick={() => handleOrderActionRequest(order, "cancel")}
                               >
@@ -1014,7 +980,7 @@ export default function BoutiquePage() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="rounded-xl"
+                                className="rounded-xl border-[#f0d8dc] bg-white shadow-[0_10px_22px_-20px_rgba(214,60,84,0.06)] transition-all hover:bg-white"
                                 disabled={orderActionLoading === `${order.id}:refund`}
                                 onClick={() => handleOrderActionRequest(order, "refund")}
                               >
@@ -1035,7 +1001,7 @@ export default function BoutiquePage() {
                   </div>
 
                   {sellerOrders.length === 0 ? (
-                    <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white/80 p-5 text-sm text-slate-500">
+                    <div className="rounded-[1.5rem] border border-dashed border-[#f0d8dc] bg-white p-5 text-sm text-slate-500 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
                       {sellerItems.length === 0 ? operationsText.noListings : operationsText.noSales}
                     </div>
                   ) : (
@@ -1045,14 +1011,14 @@ export default function BoutiquePage() {
                       const supportMeta = getSupportStatusMeta(order);
                       const proofMeta = getProofStatusMeta(order);
                       return (
-                        <div key={order.id} className="rounded-[1.5rem] border border-slate-100 bg-white p-4 shadow-sm">
-                          <div className="flex items-start justify-between gap-3">
+                        <div key={order.id} className="rounded-[1.5rem] border border-white/90 bg-white p-4 shadow-[0_12px_24px_-22px_rgba(214,60,84,0.06)]">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                               <div className="text-sm font-semibold text-slate-900">{order.itemTitle || t("item")}</div>
                               <div className="mt-1 text-xs text-slate-500">{operationsText.orderDate}: {formatOrderDate(order.createdAt)}</div>
                             </div>
-                            <div className="text-right">
-                              <div className="text-sm font-semibold text-[#9B2335]">{formatShopMoney(order.sellerAmount || order.totalAmount || order.itemPrice)}</div>
+                            <div className="sm:text-right">
+                              <div className="text-sm font-semibold text-[#D63C54]">{formatShopMoney(order.sellerAmount || order.totalAmount || order.itemPrice)}</div>
                               <div className="mt-1 text-xs text-slate-500">{operationsText.buyer}: {order.buyerName || "-"}</div>
                             </div>
                           </div>
@@ -1079,17 +1045,17 @@ export default function BoutiquePage() {
         </Card>
       )}
 
-      <Card className="overflow-hidden rounded-[2rem] border-0 bg-gradient-to-br from-violet-50 via-white to-rose-50 shadow-sm">
+      <Card className="overflow-hidden rounded-[2rem] border border-white/90 bg-[linear-gradient(135deg,_rgba(255,255,255,0.99)_0%,_rgba(255,247,248,0.98)_55%,_rgba(255,242,245,0.97)_100%)] shadow-[0_24px_60px_-40px_rgba(214,60,84,0.08)]">
         <CardContent className="p-6">
           <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <div className="flex items-center gap-2 text-violet-700">
+              <div className="flex items-center gap-2 text-[#D63C54]">
                 <Store className="h-6 w-6" />
                 <span className="text-sm font-semibold uppercase tracking-wide">
                   {language === "ht" ? "Boutik patnè" : "Boutiques partenaires"}
                 </span>
               </div>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">
+              <h2 className="mt-2 text-xl font-semibold">
                 {language === "ht"
                   ? "Dekouvri magazen afilye yo nan boutik la"
                   : "Découvrez les magasins affiliés dans la boutique"}
@@ -1106,7 +1072,7 @@ export default function BoutiquePage() {
             {filters.shopName && (
               <Button
                 variant="outline"
-                className="rounded-xl"
+                className="w-full rounded-xl border-[#f0d8dc] bg-white shadow-[0_10px_26px_-22px_rgba(214,60,84,0.12)] transition-all hover:bg-white sm:w-auto"
                 onClick={() => handleShopFilterSelect("")}
               >
                 {language === "ht" ? "Wè tout boutik yo" : "Voir toutes les boutiques"}
@@ -1121,35 +1087,39 @@ export default function BoutiquePage() {
                   key={shop.name}
                   type="button"
                   onClick={() => handleShopFilterSelect(shop.name)}
-                  className={`rounded-[1.5rem] border p-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${
+                  className={`rounded-[1.45rem] border p-4 text-left transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_40px_-30px_rgba(214,60,84,0.12)] ${
                     shop.hasActiveFilter
-                      ? "border-violet-300 bg-violet-100/70 shadow-sm"
-                      : "border-white/80 bg-white/90"
+                      ? "border-[#f3c7d0] bg-[linear-gradient(180deg,_rgba(255,243,246,0.98)_0%,_rgba(255,250,251,0.96)_100%)] shadow-[0_16px_34px_-28px_rgba(214,60,84,0.1)]"
+                      : "border-white/90 bg-white shadow-[0_16px_34px_-28px_rgba(214,60,84,0.08)]"
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex h-16 w-16 items-center justify-center rounded-[1.25rem] bg-violet-100 text-violet-700">
-                      <Store className="h-8 w-8" />
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1rem] bg-[#fff1f4] text-[#D63C54]">
+                      <Store className="h-6 w-6" />
                     </div>
-                    <Badge className="rounded-full bg-violet-100 text-violet-700">
-                      {sellerTypeLabels.affiliate_shop}
-                    </Badge>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h3 className="text-base font-semibold text-slate-900">{shop.name}</h3>
+                          <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                            <span className="rounded-full bg-[#fff4f6] px-2.5 py-1 text-[#D63C54]">
+                              {shop.count} {language === "ht" ? "atik" : shop.count > 1 ? "articles" : "article"}
+                            </span>
+                            {shop.location && (
+                              <span className="rounded-full bg-slate-50 px-2.5 py-1 text-slate-500">
+                                {shop.location}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <Badge className="rounded-full bg-[#fff1f4] text-[#D63C54]">
+                          {sellerTypeLabels.affiliate_shop}
+                        </Badge>
+                      </div>
+                    </div>
                   </div>
 
-                  <h3 className="mt-4 text-lg font-semibold text-slate-900">{shop.name}</h3>
-
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                    <span className="rounded-full bg-slate-100 px-3 py-1">
-                      {shop.count} {language === "ht" ? "atik" : shop.count > 1 ? "articles" : "article"}
-                    </span>
-                    {shop.location && (
-                      <span className="rounded-full bg-slate-100 px-3 py-1">
-                        {shop.location}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="mt-4 flex items-center justify-between text-sm font-medium text-violet-700">
+                  <div className="mt-3 flex items-center justify-between text-sm font-medium text-[#D63C54]">
                     <span>
                       {shop.hasActiveFilter
                         ? language === "ht"
@@ -1165,8 +1135,8 @@ export default function BoutiquePage() {
               ))}
             </div>
           ) : (
-            <div className="rounded-[1.5rem] border border-dashed border-violet-200 bg-white/80 p-6 text-center">
-              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-[1.75rem] bg-violet-100 text-violet-700">
+            <div className="rounded-[1.5rem] border border-dashed border-[#f0d8dc] bg-white p-6 text-center shadow-[0_16px_34px_-28px_rgba(214,60,84,0.08)] backdrop-blur-sm">
+              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-[1.75rem] bg-[#fff1f4] text-[#D63C54]">
                 <Store className="h-10 w-10" />
               </div>
               <h3 className="mt-4 text-lg font-semibold text-slate-900">
@@ -1179,7 +1149,7 @@ export default function BoutiquePage() {
 
       {/* Post form */}
       {showForm && (
-        <Card className="rounded-[2rem] border-0 shadow-lg">
+        <Card className="rounded-[2rem] border border-white/90 bg-[linear-gradient(135deg,_rgba(255,255,255,0.99)_0%,_rgba(255,247,248,0.98)_55%,_rgba(255,242,245,0.98)_100%)] shadow-[0_20px_44px_-34px_rgba(214,60,84,0.08)]">
           <CardContent className="p-6">
             <h2 className="mb-4 text-lg font-bold">{t("sellItem")}</h2>
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -1190,7 +1160,7 @@ export default function BoutiquePage() {
                     placeholder={t("itemExample")}
                     value={form.title}
                     onChange={(e) => setForm({ ...form, title: e.target.value })}
-                    className="rounded-xl"
+                    className="rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                     required
                   />
                 </div>
@@ -1201,7 +1171,7 @@ export default function BoutiquePage() {
                     placeholder={t("priceExample")}
                     value={form.price}
                     onChange={(e) => setForm({ ...form, price: e.target.value })}
-                    className="rounded-xl"
+                    className="rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                     required
                     min="0"
                   />
@@ -1214,7 +1184,7 @@ export default function BoutiquePage() {
                   placeholder={t("descriptionExample")}
                   value={form.description}
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  className="min-h-[80px] rounded-xl"
+                  className="min-h-[80px] rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                 />
               </div>
 
@@ -1226,7 +1196,7 @@ export default function BoutiquePage() {
                   <select
                     value={form.sellerType}
                     onChange={(e) => setForm({ ...form, sellerType: e.target.value })}
-                    className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                    className="w-full rounded-xl border border-[#e6d5db] bg-white/90 px-3 py-2 text-sm shadow-sm"
                   >
                     <option value="individual">{sellerTypeLabels.individual}</option>
                     <option value="affiliate_shop">{sellerTypeLabels.affiliate_shop}</option>
@@ -1241,7 +1211,7 @@ export default function BoutiquePage() {
                     placeholder={language === "ht" ? "Egzanp: Boutik Manman" : "Ex : Boutique Maman"}
                     value={form.shopName}
                     onChange={(e) => setForm({ ...form, shopName: e.target.value })}
-                    className="rounded-xl"
+                    className="rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                   />
                 </div>
               </div>
@@ -1252,7 +1222,7 @@ export default function BoutiquePage() {
                   <select
                     value={form.category}
                     onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                    className="w-full rounded-xl border border-[#e6d5db] bg-white/90 px-3 py-2 text-sm shadow-sm"
                   >
                     {categories.filter((c) => c.id !== "all").map((c) => (
                       <option key={c.id} value={c.id}>{c.label}</option>
@@ -1264,7 +1234,7 @@ export default function BoutiquePage() {
                   <select
                     value={form.condition}
                     onChange={(e) => setForm({ ...form, condition: e.target.value })}
-                    className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                    className="w-full rounded-xl border border-[#e6d5db] bg-white/90 px-3 py-2 text-sm shadow-sm"
                   >
                     <option value="new">{t("new")}</option>
                     <option value="like-new">{t("likeNew")}</option>
@@ -1282,12 +1252,12 @@ export default function BoutiquePage() {
                       location: e.target.value,
                       sellerLocationSource: "manual",
                     })}
-                    className="rounded-xl"
+                    className="rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                   />
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-orange-100 bg-orange-50 p-4">
+              <div className="rounded-2xl border border-orange-100 bg-[linear-gradient(135deg,_rgba(255,247,237,0.96)_0%,_rgba(255,251,235,0.96)_100%)] p-4 shadow-[0_18px_42px_-34px_rgba(251,146,60,0.26)]">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-sm font-medium text-orange-800">
@@ -1322,7 +1292,7 @@ export default function BoutiquePage() {
                   placeholder={t("contactExample")}
                   value={form.contact}
                   onChange={(e) => setForm({ ...form, contact: e.target.value })}
-                  className="rounded-xl"
+                  className="rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                 />
               </div>
 
@@ -1334,7 +1304,7 @@ export default function BoutiquePage() {
                   placeholder="+509 34 56 78 90"
                   value={form.moncashPhone}
                   onChange={(e) => setForm({ ...form, moncashPhone: e.target.value })}
-                  className="rounded-xl"
+                  className="rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                 />
                 <p className="mt-1 text-xs text-slate-500">
                   {t("receivePaymentsText") || "Pour recevoir les paiements directement sur votre compte MonCash"}
@@ -1349,7 +1319,7 @@ export default function BoutiquePage() {
                   placeholder="+509 34 56 78 90"
                   value={form.natcashPhone}
                   onChange={(e) => setForm({ ...form, natcashPhone: e.target.value })}
-                  className="rounded-xl"
+                  className="rounded-xl border-[#e6d5db] bg-white/90 shadow-sm"
                 />
                 <p className="mt-1 text-xs text-slate-500">
                   {t("receiveNatCashPaymentsText") || "Pour recevoir les paiements NatCash directement sur votre compte NatCash"}
@@ -1369,7 +1339,7 @@ export default function BoutiquePage() {
               <Button
                 type="submit"
                 disabled={submitting || !form.title || !form.price}
-                className="rounded-2xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] px-6 shadow-sm shadow-rose-300 transition-all hover:shadow-md hover:brightness-110"
+                className="rounded-2xl bg-gradient-to-r from-[#F04A64] to-[#C81E3A] px-6 shadow-[0_16px_30px_-20px_rgba(214,60,84,0.18)] transition-all hover:shadow-[0_18px_34px_-20px_rgba(214,60,84,0.24)] hover:brightness-105"
               >
                 {submitting ? t("sending") + "..." : t("publish")}
               </Button>
@@ -1378,13 +1348,11 @@ export default function BoutiquePage() {
         </Card>
       )}
 
-      
-      
       {/* Items grid */}
       {loading ? (
         <div className="py-20 text-center text-slate-400">{t("loadingItems")}</div>
       ) : loadingError ? (
-        <Card className="rounded-[2rem] border-0 shadow-sm">
+        <Card className="rounded-[2rem] border border-white/90 bg-white shadow-[0_18px_36px_-28px_rgba(214,60,84,0.08)] backdrop-blur-sm">
           <CardContent className="py-16 text-center">
             <ShoppingBag className="mx-auto h-12 w-12 text-slate-300" />
             <h3 className="mt-4 text-lg font-semibold">{operationsText.loadError}</h3>
@@ -1394,7 +1362,7 @@ export default function BoutiquePage() {
           </CardContent>
         </Card>
       ) : filteredItems.length === 0 ? (
-        <Card className="rounded-[2rem] border-0 shadow-sm">
+        <Card className="rounded-[2rem] border border-white/90 bg-white shadow-[0_18px_36px_-28px_rgba(214,60,84,0.08)] backdrop-blur-sm">
           <CardContent className="py-16 text-center">
             <ShoppingBag className="mx-auto h-12 w-12 text-slate-300" />
             <h3 className="mt-4 text-lg font-semibold">{t("noItems")}</h3>
@@ -1407,175 +1375,117 @@ export default function BoutiquePage() {
         </Card>
       ) : (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
             {visibleItems.map((item) => (
               <Card
                 key={item.id}
-                className="group card-hover overflow-hidden rounded-[1.5rem] border-0 shadow-sm"
+                id={item.id}
+                className="group card-hover overflow-hidden rounded-[1.9rem] border border-white/90 bg-[linear-gradient(180deg,_rgba(255,255,255,1)_0%,_rgba(255,248,249,0.99)_100%)] shadow-[0_18px_36px_-28px_rgba(214,60,84,0.08)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_22px_44px_-30px_rgba(214,60,84,0.12)]"
               >
                 {/* Images */}
-                {item.images && item.images.length > 0 ? (
-                  <div className="relative h-48 w-full overflow-hidden bg-slate-100">
-                    <img
-                      src={item.images[0].url}
-                      alt={item.title}
-                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                      onError={(e) => {
-                        e.target.style.display = "none";
-                        e.target.nextSibling.style.display = "flex";
-                      }}
-                    />
-                    {item.images.length > 1 && (
-                      <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-xs text-white">
-                        +{item.images.length - 1}
-                      </div>
-                    )}
-                    <div className="hidden h-full w-full items-center justify-center bg-gradient-to-br from-rose-50 to-pink-50">
-                      <ImageIcon className="h-10 w-10 text-slate-300" />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex h-48 w-full items-center justify-center bg-gradient-to-br from-rose-50 to-pink-50">
-                    <ShoppingBag className="h-10 w-10 text-rose-200" />
-                  </div>
-                )}
-
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="font-semibold leading-tight line-clamp-2">{item.title}</h3>
-                    <span className="shrink-0 text-lg font-bold text-[#9B2335]">
-                      {item.price?.toLocaleString()} HTG
-                    </span>
-                  </div>
-
-                  {item.description && (
-                    <p className="mt-2 text-sm text-slate-500 line-clamp-2">{item.description}</p>
-                  )}
-
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    <Badge className={`rounded-full text-xs ${conditionColors[item.condition] || "bg-slate-100 text-slate-600"}`}>
-                      {conditionLabels[item.condition] || item.condition}
-                    </Badge>
-                    {item.category && (
-                      <Badge variant="secondary" className="rounded-full text-xs">
-                        {categories.find((c) => c.id === item.category)?.label || item.category}
-                      </Badge>
-                    )}
-                    {(item.sellerType === "affiliate_shop" || item.shopName) && (
-                      <Badge className="rounded-full bg-violet-100 text-violet-700 text-xs">
-                        {sellerTypeLabels.affiliate_shop}
-                      </Badge>
-                    )}
-                    {item.shopName && (
-                      <Badge
-                        variant="outline"
-                        className="rounded-full cursor-pointer text-xs hover:bg-slate-50"
-                        onClick={() => handleShopFilterSelect(item.shopName)}
-                      >
-                        {item.shopName}
-                      </Badge>
-                    )}
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 text-xs text-slate-400">
-                      {item.shopName && (
-                        <button
-                          type="button"
-                          onClick={() => handleShopFilterSelect(item.shopName)}
-                          className="font-medium text-slate-500 hover:text-slate-700"
-                        >
-                          {item.shopName}
-                        </button>
-                      )}
-                      <span>{item.authorName}</span>
-                      {item.location && (
-                        <span className="flex items-center gap-0.5">
-                          <MapPin className="h-3 w-3" />
-                          {item.location}
-                        </span>
-                      )}
-                      {!item.location && item.sellerCoordinates && (
-                        <span className="flex items-center gap-0.5">
-                          <MapPin className="h-3 w-3" />
-                          GPS
-                        </span>
-                      )}
-                    </div>
-                    
-                    {item.authorId && (
-                      <Link href={`/reviews/${item.authorId}`}>
-                        <div className="flex cursor-pointer items-center gap-1 text-xs text-slate-500 hover:text-slate-700">
-                          <RatingDisplay userId={item.authorId} size="xs" showCount={false} />
+                <Link href={`/boutique/${item.id}`} className="block">
+                  {item.images && item.images.length > 0 ? (
+                    <div className="relative h-48 w-full overflow-hidden bg-slate-100">
+                      <img
+                        src={item.images[0].url}
+                        alt={item.title}
+                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                        onError={(e) => {
+                          e.target.style.display = "none";
+                          e.target.nextSibling.style.display = "flex";
+                        }}
+                      />
+                      {item.images.length > 1 && (
+                        <div className="absolute right-3 top-3 flex h-7 min-w-7 items-center justify-center rounded-full border border-white/30 bg-slate-950/55 px-2 text-xs text-white backdrop-blur-sm">
+                          +{item.images.length - 1}
                         </div>
-                      </Link>
-                    )}
-                  </div>
-
-                  {item.contact && (
-                    <a
-                      href={`tel:${item.contact}`}
-                      className="mt-3 flex items-center gap-1.5 text-sm font-medium text-[#9B2335] hover:underline"
-                    >
-                      <Phone className="h-3.5 w-3.5" />
-                      {item.contact}
-                    </a>
+                      )}
+                      <div className="hidden h-full w-full items-center justify-center bg-gradient-to-br from-white to-[#fff0f2]">
+                        <ImageIcon className="h-10 w-10 text-slate-300" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex h-48 w-full items-center justify-center bg-gradient-to-br from-white via-[#fff4f6] to-[#ffe9ed]">
+                      <ShoppingBag className="h-10 w-10 text-slate-300" />
+                    </div>
                   )}
+                </Link>
 
-                  {/* Action buttons */}
-                  <div className="mt-4 flex flex-col gap-2">
-                    <Button
-                      variant="outline"
-                      className="w-full rounded-xl text-sm font-medium py-2.5"
-                      onClick={() => handleToggleFavorite(item.id)}
-                    >
-                      <Heart className={`h-4 w-4 mr-2 ${favorites[item.id] ? "fill-red-500 text-red-500" : ""}`} />
-                      {favorites[item.id] ? t("removeFromFavorites") : t("addToFavorites")}
-                    </Button>
-                    
-                    {user && item.authorId !== user.uid && (
-                      <div className="flex flex-col gap-2">
+                <CardContent className="flex h-full flex-col p-4">
+                  <div className="flex flex-1 flex-col">
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge className={`rounded-full text-xs ${conditionColors[item.condition] || "bg-slate-100 text-slate-600"}`}>
+                        {conditionLabels[item.condition] || item.condition}
+                      </Badge>
+                      {item.category && (
+                        <Badge variant="secondary" className="rounded-full bg-white text-xs text-slate-700 shadow-sm">
+                          {categories.find((c) => c.id === item.category)?.label || item.category}
+                        </Badge>
+                      )}
+                      {(item.sellerType === "affiliate_shop" || item.shopName) && (
+                        <Badge className="rounded-full bg-[#ffecef] text-[#D63C54] text-xs">
+                          {sellerTypeLabels.affiliate_shop}
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="mt-3 flex items-start justify-between gap-3">
+                      <Link href={`/boutique/${item.id}`} className="min-w-0 flex-1">
+                        <h3 className="line-clamp-2 text-lg font-semibold leading-tight text-slate-900 transition-colors hover:text-[#D63C54]">{item.title}</h3>
+                      </Link>
+                      <div className="shrink-0 rounded-[1.1rem] border border-[#f3d3da] bg-[#fff6f7] px-3 py-2 text-right shadow-[0_12px_24px_-22px_rgba(214,60,84,0.1)]">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#d98091]">{t("price")}</div>
+                        <div className="mt-1 text-base font-bold text-[#D63C54]">{item.price?.toLocaleString()} HTG</div>
+                      </div>
+                    </div>
+
+                    <div className={`mt-4 grid gap-2 ${user && item.authorId === user.uid ? "" : "sm:grid-cols-2"}`}>
+                      <Button
+                        asChild
+                        variant="outline"
+                        className="w-full rounded-[1rem] border-[#f0d8dc] bg-white py-2.5 text-sm font-medium text-[#D63C54] shadow-[0_10px_22px_-20px_rgba(214,60,84,0.06)] transition-all hover:bg-[#fff5f6]"
+                      >
+                        <Link href={`/boutique/${item.id}`}>
+                          {t("viewDetails")}
+                        </Link>
+                      </Button>
+                      {(!user || item.authorId !== user.uid) ? (
                         <Button
-                          className="w-full rounded-xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] text-sm font-medium py-2.5 shadow-sm hover:shadow-md transition-all"
-                          onClick={() => handlePurchase(item)}
+                          type="button"
+                          variant="outline"
+                          className="w-full rounded-[1rem] border-[#f0d8dc] bg-white py-2.5 text-sm font-medium text-slate-700 shadow-[0_10px_22px_-20px_rgba(214,60,84,0.06)] transition-all hover:bg-[#fff5f6]"
+                          onClick={() => handleAddToCart(item)}
+                          disabled={cartItemIds.includes(item.id)}
                         >
-                          <ShoppingBag className="h-4 w-4 mr-2" />
-                          {t("buyNow")}
+                          <ShoppingCart className="mr-2 h-4 w-4" />
+                          {cartItemIds.includes(item.id) ? cartText.added : cartText.add}
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    {/* Owner actions */}
+                    {user && item.authorId === user.uid && (
+                      <div className="mt-4 flex flex-col gap-2 border-t border-[#f4e1e5] pt-4 sm:flex-row">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1 rounded-xl border-[#f0d8dc] bg-white text-xs text-[#D63C54]"
+                          onClick={() => handleMarkSold(item.id)}
+                        >
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                          {t("sell")}
                         </Button>
                         <Button
+                          size="sm"
                           variant="outline"
-                          className="w-full rounded-xl text-sm font-medium py-2.5 border-2 hover:bg-slate-50 transition-all"
-                          onClick={() => handleContact(item)}
+                          className="rounded-xl border-red-200 bg-white text-xs text-red-500 hover:bg-red-50 hover:text-red-600"
+                          onClick={() => handleDelete(item.id)}
                         >
-                          <MessageCircle className="h-4 w-4 mr-2" />
-                          {t("contactToSeller")}
+                          <Trash2 className="h-3 w-3" />
                         </Button>
                       </div>
                     )}
                   </div>
-
-                  {/* Owner actions */}
-                  {user && item.authorId === user.uid && (
-                    <div className="mt-3 flex gap-2 border-t pt-3">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="flex-1 rounded-xl text-xs"
-                        onClick={() => handleMarkSold(item.id)}
-                      >
-                        <CheckCircle2 className="mr-1 h-3 w-3" />
-                        {t("sell")}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="rounded-xl text-xs text-red-500 hover:bg-red-50 hover:text-red-600"
-                        onClick={() => handleDelete(item.id)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  )}
                 </CardContent>
               </Card>
             ))}
@@ -1586,7 +1496,7 @@ export default function BoutiquePage() {
               <Button
                 type="button"
                 variant="outline"
-                className="rounded-2xl"
+                className="w-full rounded-2xl border-[#e6d5db] bg-white/88 px-5 shadow-sm transition-all hover:bg-white sm:w-auto"
                 onClick={handleLoadMoreItems}
                 disabled={loading}
               >
@@ -1601,75 +1511,21 @@ export default function BoutiquePage() {
 
       {/* Info section */}
       {!user && (
-        <Card className="rounded-[2rem] border-0 bg-gradient-to-br from-rose-50 to-pink-50 shadow-sm">
+        <Card className="rounded-[2rem] border border-white/90 bg-[linear-gradient(135deg,_rgba(255,250,251,0.99)_0%,_rgba(255,255,255,0.99)_100%)] shadow-[0_18px_36px_-28px_rgba(214,60,84,0.08)]">
           <CardContent className="p-8 text-center">
-            <Heart className="mx-auto h-10 w-10 text-[#9B2335]" />
+            <Heart className="mx-auto h-10 w-10 text-[#D63C54]" />
             <h3 className="mt-3 text-lg font-bold">{t("welcomeTitle")}</h3>
             <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
               {t("welcomeDesc")}
             </p>
             <Button
-              className="mt-4 rounded-2xl bg-gradient-to-r from-[#9B2335] to-[#7B1A2C] shadow-sm shadow-rose-300"
+              className="mt-4 rounded-2xl bg-gradient-to-r from-[#F04A64] to-[#C81E3A] shadow-[0_16px_30px_-20px_rgba(214,60,84,0.18)]"
               onClick={() => (window.location.href = "/register")}
             >
               {t("signUpNow")}
             </Button>
           </CardContent>
         </Card>
-      )}
-
-      {/* Payment Modal */}
-      {showPayment && selectedItem && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold">{t("securePayment")}</h2>
-                <button
-                  onClick={() => {
-                    setShowPayment(false);
-                    setSelectedItem(null);
-                  }}
-                  className="text-slate-400 hover:text-slate-600"
-                >
-                  ✕
-                </button>
-              </div>
-              
-              <div className="mb-6 p-4 bg-slate-50 rounded-xl">
-                <div className="flex items-center gap-3">
-                  {selectedItem.images?.[0]?.url && (
-                    <img 
-                      src={selectedItem.images[0].url} 
-                      alt={selectedItem.title || selectedItem.name}
-                      className="w-16 h-16 object-cover rounded-lg"
-                    />
-                  )}
-                  <div className="flex-1">
-                    <h3 className="font-medium">{selectedItem.title || selectedItem.name}</h3>
-                    <p className="text-sm text-slate-500">{selectedItem.condition}</p>
-                    <p className="text-lg font-bold text-[#9B2335]">
-                      ${selectedItem.price.toFixed(2)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                  {language === "ht"
-                    ? "Apre konfimasyon an, kòmand ou a ap parèt nan zòn acha ou yo pou ou ka swiv li fasilman."
-                    : "Après confirmation, votre commande apparaîtra dans votre espace d'achats pour que vous puissiez la suivre facilement."}
-                </div>
-                <PaymentForm 
-                  amount={parseFloat(selectedItem.price)}
-                  itemInfo={selectedItem}
-                  onSuccess={handlePaymentSuccess}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
       )}
 
       <ActionDialog

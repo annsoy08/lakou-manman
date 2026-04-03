@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
+import { getPublicSiteUrl } from '@/lib/public-site';
 
 const DEFAULT_MONCASH_API_BASE_URL = 'https://sandbox.moncashbutton.digicelgroup.com/Api';
 const DEFAULT_MONCASH_GATEWAY_BASE_URL = 'https://sandbox.moncashbutton.digicelgroup.com/Moncash-middleware';
@@ -157,6 +158,11 @@ function getMonCashGatewayBaseUrl() {
   return String(process.env.MONCASH_GATEWAY_BASE_URL || DEFAULT_MONCASH_GATEWAY_BASE_URL).replace(/\/+$/, '');
 }
 
+function parseBooleanEnv(value) {
+  const normalizedValue = String(value || '').trim().toLowerCase().replace(/^['\"]|['\"]$/g, '');
+  return ['1', 'true', 'yes', 'on'].includes(normalizedValue);
+}
+
 async function getMonCashToken() {
   const clientId = process.env.MONCASH_CLIENT_ID;
   const clientSecret = process.env.MONCASH_CLIENT_SECRET;
@@ -229,6 +235,7 @@ export async function POST(request) {
 
     const moncashApiBaseUrl = getMonCashApiBaseUrl();
     const moncashGatewayBaseUrl = getMonCashGatewayBaseUrl();
+    const publicSiteUrl = getPublicSiteUrl();
     const validationResult = validatePaymentPayload(requestPayload);
     if (!validationResult.value) {
       return jsonNoStore(
@@ -267,7 +274,7 @@ export async function POST(request) {
     const orderId = buildTransactionReference('LM');
 
     // Try real MonCash API first
-    const allowDemoMode = process.env.MONCASH_ALLOW_DEMO === 'true';
+    const allowDemoMode = parseBooleanEnv(process.env.MONCASH_ALLOW_DEMO);
     const {
       accessToken: moncashToken,
       reason: moncashTokenReason,
@@ -276,7 +283,7 @@ export async function POST(request) {
 
     if (!moncashToken && !allowDemoMode) {
       const message = moncashTokenReason === 'missing_credentials'
-        ? "MonCash réel n’est pas configuré. Ajoutez MONCASH_CLIENT_ID, MONCASH_CLIENT_SECRET et NEXT_PUBLIC_URL."
+        ? "MonCash réel n’est pas configuré. Ajoutez MONCASH_CLIENT_ID, MONCASH_CLIENT_SECRET et NEXT_PUBLIC_SITE_URL ou NEXT_PUBLIC_URL."
         : "Impossible d’initialiser MonCash réel pour le moment. Vérifiez les identifiants et la connectivité.";
 
       return jsonNoStore(
@@ -287,6 +294,14 @@ export async function POST(request) {
           reason: moncashTokenReason,
           details: moncashTokenDetails,
           demoMode: false,
+          ...(process.env.NODE_ENV !== 'production'
+            ? {
+                debug: {
+                  allowDemoMode,
+                  rawAllowDemoMode: process.env.MONCASH_ALLOW_DEMO ?? null,
+                },
+              }
+            : {}),
         },
         { status: 503 }
       );
@@ -334,7 +349,8 @@ export async function POST(request) {
             paymentToken,
             paymentUrl: `${moncashGatewayBaseUrl}/Payment/Redirect?token=${encodeURIComponent(paymentToken)}`,
             realMonCash: true,
-            moncashMode: moncashData?.mode || ''
+            moncashMode: moncashData?.mode || '',
+            callbackUrl: `${publicSiteUrl}/api/moncash-webhook`,
           };
           
           console.log('MONCASH REAL SUCCESS:', {
@@ -461,12 +477,14 @@ Example real implementation:
 
 const moncash = require('moncash-sdk');
 
+const publicSiteUrl = getPublicSiteUrl();
+
 const payment = await moncash.createPayment({
   amount: amount * 100, // Convert to cents
   currency: 'HTG',
   phone: phoneNumber,
   description: itemName,
-  callback_url: `${process.env.NEXT_PUBLIC_URL}/api/moncash-webhook`
+  callback_url: `${publicSiteUrl}/api/moncash-webhook`
 });
 
 return {
@@ -474,4 +492,5 @@ return {
   transactionId: payment.transaction_id,
   paymentUrl: payment.payment_url
 };
+
 */

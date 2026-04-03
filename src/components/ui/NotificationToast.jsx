@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Bell, X, MessageCircle, Heart, ShoppingBag } from "lucide-react";
+import { Bell, X, MessageCircle, Heart, ShoppingBag, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useRouter } from "next/navigation";
@@ -121,6 +121,8 @@ export default function NotificationToast({ notification, onClose }) {
     switch (type) {
       case "message":
         return <MessageCircle className="h-4 w-4 text-blue-500" />;
+      case "chess":
+        return <Trophy className="h-4 w-4 text-amber-500" />;
       case "favorite":
         return <Heart className="h-4 w-4 text-red-500" />;
       case "item":

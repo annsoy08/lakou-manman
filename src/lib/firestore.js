@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   addDoc,
+  getCountFromServer,
   getDoc,
   getDocs,
   updateDoc,
@@ -11,6 +12,7 @@ import {
   where,
   orderBy,
   limit,
+  limitToLast,
   startAfter,
   serverTimestamp,
   increment,
@@ -18,8 +20,9 @@ import {
   arrayRemove,
   writeBatch,
   onSnapshot,
+  runTransaction,
 } from "firebase/firestore";
-import { getFirebaseDb } from "./firebase";
+import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { DOCTOR_SPECIALTY_STARTER_PROFILES, findStarterDoctorUserMatch } from "./doctor-specialty-content";
 
 const defaultVaccinationProfile = {
@@ -94,6 +97,21 @@ function isFirestoreQueryIndexError(error) {
     || message.includes("index");
 }
 
+function isTransientFirestoreNetworkError(error) {
+  const code = String(error?.code || "").trim().toLowerCase();
+  const message = String(error?.message || "").trim().toLowerCase();
+
+  return code === "unavailable"
+    || code === "firestore/unavailable"
+    || code === "failed-precondition"
+    || message.includes("offline")
+    || message.includes("network")
+    || message.includes("name_not_resolved")
+    || message.includes("err_name_not_resolved")
+    || message.includes("could not reach cloud firestore backend")
+    || message.includes("client is offline");
+}
+
 function chunkValues(values = [], chunkSize = 10) {
   const normalizedValues = Array.isArray(values) ? values : [];
   const normalizedChunkSize = Math.max(1, Number.parseInt(String(chunkSize ?? "10"), 10) || 10);
@@ -122,6 +140,32 @@ function normalizeUserModerationStatus(value = "") {
   }
 
   return normalized || "active";
+}
+
+function normalizeShopCartNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function normalizeUserShopCartItem(item = {}) {
+  return {
+    id: String(item?.id || "").trim(),
+    title: String(item?.title || item?.name || "").trim(),
+    price: normalizeShopCartNumber(item?.price),
+    imageUrl: String(item?.imageUrl || item?.images?.[0]?.url || "").trim(),
+    condition: String(item?.condition || "").trim(),
+    sellerName: String(item?.sellerName || item?.authorName || "").trim(),
+    shopName: String(item?.shopName || "").trim(),
+    status: String(item?.status || "available").trim().toLowerCase() || "available",
+    addedAt: String(item?.addedAt || "").trim() || new Date(0).toISOString(),
+  };
+}
+
+function normalizeUserShopCart(cartItems = []) {
+  return (Array.isArray(cartItems) ? cartItems : [])
+    .map((item) => normalizeUserShopCartItem(item))
+    .filter((item) => item.id)
+    .sort((a, b) => String(b?.addedAt || "").localeCompare(String(a?.addedAt || "")));
 }
 
 function normalizeDoctorLanguages(value) {
@@ -272,16 +316,19 @@ async function getInteractionBlockStatus(userId, targetUserId) {
     return { blocked: false, direction: "none" };
   }
 
-  const [directBlock, reverseBlock] = await Promise.all([
-    getDoc(doc(firestore, "userBlocks", buildUserBlockId(userId, targetUserId))),
-    getDoc(doc(firestore, "userBlocks", buildUserBlockId(targetUserId, userId))),
+  const [directBlockSnap, reverseBlockSnap] = await Promise.all([
+    getDocs(query(collection(firestore, "userBlocks"), where("userId", "==", userId), limit(25))),
+    getDocs(query(collection(firestore, "userBlocks"), where("targetUserId", "==", userId), limit(25))),
   ]);
 
-  if (directBlock.exists()) {
+  const hasDirectBlock = directBlockSnap.docs.some((blockDoc) => String(blockDoc.data()?.targetUserId || "").trim() === targetUserId);
+  const hasReverseBlock = reverseBlockSnap.docs.some((blockDoc) => String(blockDoc.data()?.userId || "").trim() === targetUserId);
+
+  if (hasDirectBlock) {
     return { blocked: true, direction: "outgoing" };
   }
 
-  if (reverseBlock.exists()) {
+  if (hasReverseBlock) {
     return { blocked: true, direction: "incoming" };
   }
 
@@ -659,19 +706,45 @@ export async function createConversation(data) {
 
 export async function sendMessage(conversationId, senderId, content, data = {}) {
   const firestore = requireDb();
-  const conversationDoc = await getDoc(doc(firestore, "conversations", conversationId));
-  if (!conversationDoc.exists()) {
-    throw new Error("Conversation not found");
+
+  let conversation = null;
+  try {
+    const conversationDoc = await getDoc(doc(firestore, "conversations", conversationId));
+    if (conversationDoc.exists()) {
+      conversation = conversationDoc.data();
+    } else {
+      throw new Error("Conversation not found");
+    }
+  } catch (err) {
+    if (String(err?.message || "").includes("Conversation not found")) {
+      throw err;
+    }
+    console.warn("sendMessage: conversation pre-read failed (non-blocking):", err?.code || err?.message);
   }
 
-  const conversation = conversationDoc.data();
-  const recipientId = conversation.participants?.find((id) => id !== senderId);
+  const recipientId = conversation?.participants?.find((id) => id !== senderId);
 
   if (recipientId) {
-    await assertUsersCanInteract(senderId, recipientId);
+    try {
+      await assertUsersCanInteract(senderId, recipientId);
+    } catch (interactErr) {
+      const HARD_INTERACT_ERRORS = ["blocked_user", "blocked_by_user", "sender_messaging_restricted", "recipient_messaging_restricted"];
+      if (HARD_INTERACT_ERRORS.includes(String(interactErr?.message || "").trim())) {
+        throw interactErr;
+      }
+      console.warn("sendMessage: interaction check failed (non-blocking):", interactErr?.message);
+    }
   }
 
-  await assertMessageNotSpam(firestore, conversationId, senderId, content, data);
+  try {
+    await assertMessageNotSpam(firestore, conversationId, senderId, content, data);
+  } catch (spamErr) {
+    const HARD_SPAM_ERRORS = ["message_rate_limited", "duplicate_message"];
+    if (HARD_SPAM_ERRORS.includes(String(spamErr?.message || "").trim())) {
+      throw spamErr;
+    }
+    console.warn("sendMessage: spam check failed (non-blocking):", spamErr?.code || spamErr?.message);
+  }
 
   const senderProfile = senderId ? await getUserProfile(senderId) : null;
   const senderName = [
@@ -709,9 +782,8 @@ export async function sendMessage(conversationId, senderId, content, data = {}) 
 
     return "Nouveau message";
   })();
-  
-  // Update conversation metadata
-  await updateDoc(doc(firestore, "conversations", conversationId), {
+
+  updateDoc(doc(firestore, "conversations", conversationId), {
     lastMessage: lastMessagePreview,
     lastMessageSenderId: senderId,
     lastMessageSenderName: senderName,
@@ -723,13 +795,11 @@ export async function sendMessage(conversationId, senderId, content, data = {}) 
       updatedAt: serverTimestamp(),
     },
     [`unreadCount.${senderId}`]: increment(0),
-    // Increment recipient's unread count
     ...(recipientId && { [`unreadCount.${recipientId}`]: increment(1) }),
+  }).catch((error) => {
+    console.warn("sendMessage: conversation metadata update failed (non-blocking):", error?.code || error?.message);
   });
 
-  // TODO: Send push notification to recipient
-  // This would require FCM token from recipient's profile
-  
   return messageRef.id;
 }
 
@@ -772,7 +842,8 @@ export function subscribeToUserConversations(userId, onData, onError) {
   const q = query(
     collection(firestore, "conversations"),
     where("participants", "array-contains", userId),
-    orderBy("lastMessageTime", "desc")
+    orderBy("lastMessageTime", "desc"),
+    limit(50)
   );
 
   return onSnapshot(
@@ -978,19 +1049,19 @@ export async function searchShopItems(filters = {}) {
   const requestedLimit = normalizeRequestedLimit(
     filters.limitCount,
     normalizedSearchQuery || normalizedLocation ? 60 : 36,
-    180
+    600
   );
   const candidatePageSize = normalizeRequestedLimit(
     filters.pageSize,
     normalizedSearchQuery || normalizedLocation
-      ? Math.min(Math.max(requestedLimit, 48), 80)
-      : Math.min(Math.max(requestedLimit, 36), 72),
-    80
+      ? Math.min(Math.max(requestedLimit, 48), 120)
+      : Math.min(Math.max(requestedLimit, 36), 96),
+    120
   );
   const maxServerDocuments = normalizeRequestedLimit(
     filters.maxServerDocuments,
     requestedLimit * (normalizedSearchQuery || normalizedLocation ? 8 : 5),
-    480
+    2400
   );
   const shopItemsCollection = collection(firestore, "shopItems");
   const indexedConstraints = [where("status", "==", "available")];
@@ -1144,6 +1215,95 @@ function toPlainRecord(docOrData) {
    );
  }
 
+async function getCurrentFirebaseIdToken() {
+  const auth = getFirebaseAuth();
+  const currentUser = auth?.currentUser;
+  if (!currentUser || typeof currentUser.getIdToken !== "function") {
+    return "";
+  }
+
+  try {
+    return String(await currentUser.getIdToken()).trim();
+  } catch (error) {
+    console.error("Error resolving Firebase ID token:", error);
+    return "";
+  }
+}
+
+async function triggerGroupPostEmailNotifications(postId, groupId) {
+  const normalizedPostId = String(postId || "").trim();
+  const normalizedGroupId = String(groupId || "").trim();
+  if (!normalizedPostId || !normalizedGroupId || typeof fetch !== "function") {
+    return;
+  }
+
+  const idToken = await getCurrentFirebaseIdToken();
+  if (!idToken) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/group-post-email", {
+      method: "POST",
+      keepalive: true,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ postId: normalizedPostId }),
+    });
+
+    if (!response.ok) {
+      const errorPayload = await response.text();
+      console.error("Group post email notification request failed:", {
+        status: response.status,
+        body: errorPayload,
+      });
+    }
+  } catch (error) {
+    console.error("Error requesting group post email notifications:", error);
+  }
+}
+
+export async function triggerChessInviteEmailNotification(gameId, recipientId) {
+  const normalizedGameId = String(gameId || "").trim();
+  const normalizedRecipientId = String(recipientId || "").trim();
+  if (!normalizedGameId || !normalizedRecipientId || typeof fetch !== "function") {
+    return false;
+  }
+
+  const idToken = await getCurrentFirebaseIdToken();
+  if (!idToken) {
+    return false;
+  }
+
+  try {
+    const response = await fetch("/api/chess-invite-email", {
+      method: "POST",
+      keepalive: true,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ gameId: normalizedGameId, recipientId: normalizedRecipientId }),
+    });
+
+    if (!response.ok) {
+      const errorPayload = await response.text();
+      console.error("Chess invite email request failed:", {
+        status: response.status,
+        body: errorPayload,
+      });
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error("Error requesting chess invite email notification:", error);
+    return false;
+  }
+}
+
 function normalizeUserProfileRecord(profile = {}) {
   return normalizeUserPresence({
     ...profile,
@@ -1155,6 +1315,8 @@ function normalizeUserProfileRecord(profile = {}) {
     moderationStatus: normalizeUserModerationStatus(profile?.moderationStatus),
     messagingRestricted: Boolean(profile?.messagingRestricted),
     profileHidden: Boolean(profile?.profileHidden),
+    groupPostEmailNotifications: profile?.groupPostEmailNotifications !== false,
+    shopCartItems: normalizeUserShopCart(profile?.shopCartItems),
   });
 }
 
@@ -1185,6 +1347,34 @@ function normalizeGroupRecord(group = {}) {
   };
 }
 
+function createGroupMemberRequiredError() {
+  const error = new Error("Group membership required to publish");
+  error.code = "group/member-required";
+  return error;
+}
+
+function createGroupPostModerationError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function createChessStageError(stage, error) {
+  const wrappedError = new Error(String(error?.message || stage || "chess_stage_error").trim() || "chess_stage_error");
+  wrappedError.code = String(error?.code || "").trim();
+  wrappedError.chessStage = String(stage || "unknown").trim() || "unknown";
+  wrappedError.cause = error;
+  return wrappedError;
+}
+
+function createConversationRequestStageError(stage, error) {
+  const wrappedError = new Error(String(error?.message || stage || "conversation_request_error").trim() || "conversation_request_error");
+  wrappedError.code = String(error?.code || "").trim();
+  wrappedError.conversationRequestStage = String(stage || "unknown").trim() || "unknown";
+  wrappedError.cause = error;
+  return wrappedError;
+}
+
 function normalizePostRecord(post = {}) {
   return {
     ...post,
@@ -1195,10 +1385,26 @@ function normalizePostRecord(post = {}) {
     authorName: String(post?.authorName || post?.author || "").trim(),
     hidden: Boolean(post?.hidden),
     reported: Boolean(post?.reported),
+    pinned: Boolean(post?.pinned || post?.isPinned),
+    isPinned: Boolean(post?.isPinned || post?.pinned),
     likesCount: Number(post?.likesCount || 0),
     commentsCount: Number(post?.commentsCount || 0),
     images: Array.isArray(post?.images) ? post.images : [],
     videos: Array.isArray(post?.videos) ? post.videos : [],
+  };
+}
+
+function normalizeUserNotificationRecord(notification = {}) {
+  return {
+    ...notification,
+    id: String(notification?.id || "").trim(),
+    type: String(notification?.type || "system").trim(),
+    title: String(notification?.title || "").trim(),
+    message: String(notification?.message || "").trim(),
+    link: String(notification?.link || "").trim(),
+    read: Boolean(notification?.read),
+    dedupeKey: String(notification?.dedupeKey || "").trim(),
+    data: notification?.data && typeof notification.data === "object" ? notification.data : {},
   };
 }
 
@@ -1282,21 +1488,42 @@ async function findExistingDirectConversation(participants = []) {
     return null;
   }
 
-  const firstParticipantId = normalizedParticipants[0];
+  const auth = getFirebaseAuth();
+  const currentUser = auth?.currentUser || null;
+  const currentUserId = String(currentUser?.uid || "").trim();
+  const queryParticipantId = normalizedParticipants.includes(currentUserId)
+    ? currentUserId
+    : normalizedParticipants[0];
   const participantsKey = buildParticipantsKey(normalizedParticipants);
-  const snap = await getDocs(
-    query(collection(firestore, "conversations"), where("participants", "array-contains", firstParticipantId))
-  );
+  if (!queryParticipantId) {
+    return null;
+  }
 
-  const matchingConversation = snap.docs
-    .map((conversationDoc) => ({ id: conversationDoc.id, ...conversationDoc.data() }))
-    .find((conversation) => {
-      const conversationParticipants = Array.isArray(conversation?.participants) ? conversation.participants : [];
-      return buildParticipantsKey(conversationParticipants) === participantsKey
-        && String(conversation?.type || "direct").trim().toLowerCase() !== "group";
-    });
+  try {
+    if (typeof currentUser?.getIdToken === "function") {
+      await currentUser.getIdToken();
+    }
 
-  return matchingConversation || null;
+    const snap = await getDocs(
+      query(collection(firestore, "conversations"), where("participants", "array-contains", queryParticipantId))
+    );
+
+    const matchingConversation = snap.docs
+      .map((conversationDoc) => ({ id: conversationDoc.id, ...conversationDoc.data() }))
+      .find((conversation) => {
+        const conversationParticipants = Array.isArray(conversation?.participants) ? conversation.participants : [];
+        return buildParticipantsKey(conversationParticipants) === participantsKey
+          && String(conversation?.type || "direct").trim().toLowerCase() !== "group";
+      });
+
+    return matchingConversation || null;
+  } catch (error) {
+    const errorCode = String(error?.code || "").trim().toLowerCase();
+    if ((errorCode === "permission-denied" || errorCode === "firestore/permission-denied") && normalizedParticipants.includes(currentUserId)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function hydrateConversationRecord(conversationDocOrData) {
@@ -1306,7 +1533,11 @@ async function hydrateConversationRecord(conversationDocOrData) {
   }
 
   const participants = Array.isArray(conversation?.participants) ? conversation.participants.filter(Boolean) : [];
-  const participantMetadata = await getParticipantMetadata(participants);
+  const hasStoredNames = conversation?.participantNames && typeof conversation.participantNames === "object"
+    && Object.keys(conversation.participantNames).length > 0;
+  const participantMetadata = hasStoredNames
+    ? { participantNames: conversation.participantNames, participantPhotos: conversation.participantPhotos || {} }
+    : await getParticipantMetadata(participants);
 
   return {
     ...conversation,
@@ -1343,6 +1574,64 @@ async function getCollectionRecords(collectionName, options = {}) {
     : await getDocs(collection(firestore, collectionName));
 
   return snap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+}
+
+async function getCollectionCount(collectionName) {
+  const firestore = resolveDb();
+  if (!firestore) {
+    return 0;
+  }
+
+  const snapshot = await getCountFromServer(collection(firestore, collectionName));
+  return Number(snapshot?.data()?.count || 0);
+}
+
+function getNormalizedUserCity(user = {}) {
+  return String(user?.city || user?.location || "").trim().toLowerCase();
+}
+
+export async function getMarketingHomepageStats() {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return null;
+  }
+
+  const [rawUsersResult, groupsCountResult, postsCountResult] = await Promise.allSettled([
+    getCollectionRecords("users"),
+    getCollectionCount("groups"),
+    getCollectionCount("posts"),
+  ]);
+
+  const rejectedResults = [rawUsersResult, groupsCountResult, postsCountResult]
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+
+  const fatalError = rejectedResults.find((error) => !isTransientFirestoreNetworkError(error));
+  if (fatalError) {
+    throw fatalError;
+  }
+
+  const rawUsers = rawUsersResult.status === "fulfilled" ? rawUsersResult.value : [];
+  const groupsCount = groupsCountResult.status === "fulfilled" ? groupsCountResult.value : 0;
+  const postsCount = postsCountResult.status === "fulfilled" ? postsCountResult.value : 0;
+
+  const visibleUsers = rawUsers
+    .map((user) => normalizeUserProfileRecord(user))
+    .filter((user) => user.id)
+    .filter((user) => !user.profileHidden)
+    .filter((user) => normalizeUserModerationStatus(user.moderationStatus) !== "suspended");
+
+  const citiesCount = new Set(
+    visibleUsers
+      .map((user) => getNormalizedUserCity(user))
+      .filter(Boolean)
+  ).size;
+
+  return {
+    membersCount: visibleUsers.length,
+    exchangesCount: postsCount,
+    citiesCount,
+    groupsCount,
+  };
 }
 
 export async function createUserProfile(uid, data = {}) {
@@ -1383,6 +1672,11 @@ export async function getUserProfile(uid) {
   return normalizeUserProfileRecord({ id: snap.id, ...snap.data() });
 }
 
+export async function getUserShopCart(uid) {
+  const profile = await getUserProfile(uid);
+  return normalizeUserShopCart(profile?.shopCartItems);
+}
+
 export async function updateUserProfile(uid, data = {}) {
   const firestore = requireDb();
   const normalizedUid = String(uid || "").trim();
@@ -1396,6 +1690,22 @@ export async function updateUserProfile(uid, data = {}) {
   }), { merge: true });
 }
 
+export async function updateUserShopCart(uid, cartItems = []) {
+  const firestore = requireDb();
+  const normalizedUid = String(uid || "").trim();
+  if (!normalizedUid) {
+    throw new Error("Missing user id");
+  }
+
+  const normalizedCartItems = normalizeUserShopCart(cartItems);
+  await setDoc(doc(firestore, "users", normalizedUid), {
+    shopCartItems: normalizedCartItems,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+  writePresenceProfileExistence(normalizedUid, true);
+  return normalizedCartItems;
+}
+
 export async function updateUserPresence(uid, data = {}) {
   const firestore = requireDb();
   const normalizedUid = String(uid || "").trim();
@@ -1403,47 +1713,160 @@ export async function updateUserPresence(uid, data = {}) {
     throw new Error("Missing user id");
   }
 
-  const cachedExists = readPresenceProfileExistence(normalizedUid);
-  if (cachedExists === false) {
-    await createUserProfile(normalizedUid, {
-      isOnline: Boolean(data?.isOnline),
-    });
-    return;
-  }
-
-  const userRef = doc(firestore, "users", normalizedUid);
-  const snap = await getDoc(userRef);
-  if (!snap.exists()) {
-    writePresenceProfileExistence(normalizedUid, false);
-    await createUserProfile(normalizedUid, {
-      isOnline: Boolean(data?.isOnline),
-    });
-    return;
-  }
-
   writePresenceProfileExistence(normalizedUid, true);
-  await updateDoc(userRef, {
+  await setDoc(doc(firestore, "users", normalizedUid), {
     isOnline: Boolean(data?.isOnline),
     lastActiveAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  }, { merge: true });
 }
 
 export async function getAllUsers() {
-  const users = await getCollectionRecords("users", { orderField: "createdAt", orderDirection: "desc" });
-  return users.map((user) => normalizeUserProfileRecord(user));
+  const users = await getCollectionRecords("users");
+  return sortByCreatedAtDesc(users.map((user) => normalizeUserProfileRecord(user)));
 }
 
 export async function getDiscoverableUsers(options = {}) {
+  const result = await getDiscoverableUsersPage(options);
+  return result.users;
+}
+
+export async function getAllDiscoverableUsers(options = {}) {
+  const normalizedExcludedUserId = String(options?.excludeUserId || "").trim();
+  const parsedBatchLimit = Number.parseInt(String(options?.batchLimit ?? "200"), 10);
+  const batchLimit = Number.isFinite(parsedBatchLimit) && parsedBatchLimit > 0
+    ? Math.min(parsedBatchLimit, 200)
+    : 200;
+  const collectedUsers = [];
+  const collectedIds = new Set();
+  let cursor = null;
+  let hasMore = true;
+  let pageCount = 0;
+
+  while (hasMore && pageCount < 40) {
+    const page = await getDiscoverableUsersPage({
+      excludeUserId: normalizedExcludedUserId,
+      limitCount: batchLimit,
+      cursor,
+    });
+
+    page.users.forEach((user) => {
+      if (!collectedIds.has(user.id)) {
+        collectedIds.add(user.id);
+        collectedUsers.push(user);
+      }
+    });
+
+    cursor = page.nextCursor || null;
+    hasMore = Boolean(page.hasMore && cursor);
+    pageCount += 1;
+  }
+
+  return collectedUsers;
+}
+
+export async function getDiscoverableUsersPage(options = {}) {
   const normalizedExcludedUserId = String(options?.excludeUserId || "").trim();
   const requestedLimit = normalizeRequestedLimit(options?.limitCount, 60, 200);
-  const users = await getAllUsers();
+  const requestedCursor = options?.cursor || null;
+  const firestore = resolveDb();
 
-  return users
+  if (!firestore) {
+    return {
+      users: [],
+      nextCursor: null,
+      hasMore: false,
+    };
+  }
+
+  const mapVisibleUsers = (docs = []) => docs
+    .map((userDoc) => normalizeUserProfileRecord({ id: userDoc.id, ...userDoc.data() }))
     .filter((user) => user.id && user.id !== normalizedExcludedUserId)
     .filter((user) => !user.profileHidden)
-    .filter((user) => normalizeUserModerationStatus(user.moderationStatus) !== "suspended")
-    .slice(0, requestedLimit);
+    .filter((user) => normalizeUserModerationStatus(user.moderationStatus) !== "suspended");
+
+  const mergeVisibleFallbackUsers = async (users = []) => {
+    if (users.length >= requestedLimit) {
+      return users.slice(0, requestedLimit);
+    }
+
+    const existingIds = new Set(users.map((user) => user.id));
+    const fallbackUsers = (await getAllUsers())
+      .filter((user) => user.id && user.id !== normalizedExcludedUserId)
+      .filter((user) => !user.profileHidden)
+      .filter((user) => normalizeUserModerationStatus(user.moderationStatus) !== "suspended")
+      .filter((user) => !existingIds.has(user.id));
+
+    return [...users, ...fallbackUsers].slice(0, requestedLimit);
+  };
+
+  try {
+    let paginationCursor = requestedCursor;
+    let lastVisibleCursor = requestedCursor;
+    let collectedUsers = [];
+    let hasMore = false;
+    let attemptCount = 0;
+
+    while (collectedUsers.length < requestedLimit && attemptCount < 5) {
+      const remainingCount = Math.max(requestedLimit - collectedUsers.length, 1);
+      const batchSize = Math.min(Math.max(remainingCount * 2, remainingCount + 10), 200);
+      const constraints = [orderBy("createdAt", "desc")];
+
+      if (paginationCursor) {
+        constraints.push(startAfter(paginationCursor));
+      }
+
+      constraints.push(limit(batchSize));
+
+      const snap = await getDocs(query(collection(firestore, "users"), ...constraints));
+
+      if (snap.empty) {
+        hasMore = false;
+        break;
+      }
+
+      const nextBatchUsers = mapVisibleUsers(snap.docs);
+      const existingIds = new Set(collectedUsers.map((user) => user.id));
+      collectedUsers = [
+        ...collectedUsers,
+        ...nextBatchUsers.filter((user) => !existingIds.has(user.id)),
+      ];
+
+      paginationCursor = snap.docs[snap.docs.length - 1] || null;
+      lastVisibleCursor = paginationCursor;
+      hasMore = snap.docs.length === batchSize;
+
+      if (!hasMore) {
+        break;
+      }
+
+      attemptCount += 1;
+    }
+
+    collectedUsers = await mergeVisibleFallbackUsers(collectedUsers);
+
+    return {
+      users: collectedUsers.slice(0, requestedLimit),
+      nextCursor: hasMore ? lastVisibleCursor : null,
+      hasMore,
+    };
+  } catch (error) {
+    if (requestedCursor) {
+      throw error;
+    }
+
+    const users = await getAllUsers();
+
+    return {
+      users: users
+        .filter((user) => user.id && user.id !== normalizedExcludedUserId)
+        .filter((user) => !user.profileHidden)
+        .filter((user) => normalizeUserModerationStatus(user.moderationStatus) !== "suspended")
+        .slice(0, requestedLimit),
+      nextCursor: null,
+      hasMore: false,
+    };
+  }
 }
 
 export async function createPost(data = {}) {
@@ -1468,27 +1891,172 @@ export async function createPost(data = {}) {
     updatedAt: serverTimestamp(),
   };
 
+  let group = null;
+
+  if (payload.groupId) {
+    group = await getGroup(payload.groupId).catch(() => null);
+    const groupMembers = Array.isArray(group?.members) ? group.members : [];
+
+    if (!group?.id || !payload.authorId || !groupMembers.includes(payload.authorId)) {
+      throw createGroupMemberRequiredError();
+    }
+
+    payload.groupName = payload.groupName || group.name || group.title || "";
+  }
+
   const ref = await addDoc(collection(firestore, "posts"), payload);
+
+  if (payload.groupId) {
+    try {
+      const recipientIds = Array.from(new Set(Array.isArray(group?.members) ? group.members : []))
+        .filter((memberId) => memberId && memberId !== payload.authorId);
+
+      if (recipientIds.length > 0) {
+        const notificationId = `group_${ref.id}`;
+        const title = payload.groupName || group?.name || group?.title || "";
+        const dedupeKey = `group:${payload.groupId}:${ref.id}`;
+        const dataPayload = {
+          authorName: payload.authorName || "Utilisateur",
+          groupId: payload.groupId,
+          groupName: title,
+          postId: ref.id,
+          postTitle: payload.title || payload.body || "",
+        };
+
+        for (const recipientChunk of chunkValues(recipientIds, 300)) {
+          const batch = writeBatch(firestore);
+
+          recipientChunk.forEach((recipientId) => {
+            batch.set(doc(firestore, "users", recipientId, "notifications", notificationId), {
+              type: "group",
+              title,
+              message: payload.title || payload.body || "",
+              link: `/groups/${payload.groupId}`,
+              read: false,
+              dedupeKey,
+              data: dataPayload,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            }, { merge: true });
+          });
+
+          await batch.commit();
+        }
+      }
+    } catch (error) {
+      console.error("Error creating group post notifications:", error);
+    }
+
+    triggerGroupPostEmailNotifications(ref.id, payload.groupId).catch((error) => {
+      console.error("Error triggering group post email notifications:", error);
+    });
+  }
+
   return ref.id;
 }
 
+export async function getPost(postId) {
+  const firestore = resolveDb();
+  const normalizedPostId = String(postId || "").trim();
+  if (!firestore || !normalizedPostId) {
+    return null;
+  }
+
+  const snap = await getDoc(doc(firestore, "posts", normalizedPostId));
+  if (!snap.exists()) {
+    return null;
+  }
+
+  return normalizePostRecord({ id: snap.id, ...snap.data() });
+}
+
 export async function getPosts(options = {}) {
+  const result = await getPostsPage(options);
+  return result.posts;
+}
+
+export async function getPostsPage(options = {}) {
   const firestore = resolveDb();
   if (!firestore) {
-    return [];
+    return {
+      posts: [],
+      nextCursor: null,
+      hasMore: false,
+    };
   }
 
   const normalizedGroupId = String(options?.groupId || "").trim();
   const requestedLimit = normalizeRequestedLimit(options?.limitCount, normalizedGroupId ? 40 : 60, 200);
-  const constraints = [orderBy("createdAt", "desc"), limit(requestedLimit)];
-  if (normalizedGroupId) {
-    constraints.unshift(where("groupId", "==", normalizedGroupId));
-  }
-
-  const snap = await getDocs(query(collection(firestore, "posts"), ...constraints));
-  return snap.docs
+  const requestedCursor = options?.cursor || null;
+  const mapVisiblePosts = (docs = []) => docs
     .map((postDoc) => normalizePostRecord({ id: postDoc.id, ...postDoc.data() }))
     .filter((post) => options?.includeHidden ? true : !post.hidden);
+
+  if (normalizedGroupId) {
+    try {
+      const groupQueryConstraints = [
+        where("groupId", "==", normalizedGroupId),
+        orderBy("createdAt", "desc"),
+      ];
+
+      if (requestedCursor) {
+        groupQueryConstraints.push(startAfter(requestedCursor));
+      }
+
+      groupQueryConstraints.push(limit(requestedLimit));
+
+      const snap = await getDocs(
+        query(
+          collection(firestore, "posts"),
+          ...groupQueryConstraints
+        )
+      );
+
+      return {
+        posts: mapVisiblePosts(snap.docs),
+        nextCursor: snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null,
+        hasMore: snap.docs.length === requestedLimit,
+      };
+    } catch (error) {
+      if (!isFirestoreQueryIndexError(error)) {
+        throw error;
+      }
+
+      if (requestedCursor) {
+        throw error;
+      }
+
+      const fallbackSnap = await getDocs(
+        query(
+          collection(firestore, "posts"),
+          where("groupId", "==", normalizedGroupId),
+          limit(requestedLimit)
+        )
+      );
+
+      const fallbackPosts = sortByCreatedAtDesc(mapVisiblePosts(fallbackSnap.docs)).slice(0, requestedLimit);
+      return {
+        posts: fallbackPosts,
+        nextCursor: null,
+        hasMore: false,
+      };
+    }
+  }
+
+  const feedQueryConstraints = [orderBy("createdAt", "desc")];
+
+  if (requestedCursor) {
+    feedQueryConstraints.push(startAfter(requestedCursor));
+  }
+
+  feedQueryConstraints.push(limit(requestedLimit));
+
+  const snap = await getDocs(query(collection(firestore, "posts"), ...feedQueryConstraints));
+  return {
+    posts: mapVisiblePosts(snap.docs),
+    nextCursor: snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null,
+    hasMore: snap.docs.length === requestedLimit,
+  };
 }
 
 export async function toggleLike(postId, userId) {
@@ -1555,6 +2123,66 @@ export async function getComments(postId) {
     query(collection(firestore, "posts", postId, "comments"), orderBy("createdAt", "asc"))
   );
   return snap.docs.map((commentDoc) => ({ id: commentDoc.id, ...commentDoc.data() }));
+}
+
+export async function setGroupPostPinned(postId, actorUserId, pinned = true) {
+  const firestore = requireDb();
+  const normalizedPostId = String(postId || "").trim();
+  const normalizedActorUserId = String(actorUserId || "").trim();
+
+  if (!normalizedPostId || !normalizedActorUserId) {
+    throw new Error("Missing post or actor user id");
+  }
+
+  const postRef = doc(firestore, "posts", normalizedPostId);
+  const postSnap = await getDoc(postRef);
+
+  if (!postSnap.exists()) {
+    throw createGroupPostModerationError("Post not found", "post/not-found");
+  }
+
+  const post = normalizePostRecord({ id: postSnap.id, ...postSnap.data() });
+
+  if (!post.groupId) {
+    throw createGroupPostModerationError("Only group posts can be pinned", "group-post/required");
+  }
+
+  const group = await getGroup(post.groupId);
+  const managerIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(group?.adminIds) ? group.adminIds : []),
+        ...(Array.isArray(group?.moderatorIds) ? group.moderatorIds : []),
+        typeof group?.ownerId === "string" ? group.ownerId : "",
+        typeof group?.createdBy === "string" ? group.createdBy : "",
+      ].filter((value) => typeof value === "string" && value.trim())
+    )
+  );
+
+  if (!group?.id || !managerIds.includes(normalizedActorUserId)) {
+    throw createGroupPostModerationError("Group moderation permission required", "group-post/forbidden");
+  }
+
+  const nextPinned = Boolean(pinned);
+
+  await updateDoc(postRef, {
+    pinned: nextPinned,
+    isPinned: nextPinned,
+    pinnedBy: nextPinned ? normalizedActorUserId : null,
+    pinnedAt: nextPinned ? serverTimestamp() : null,
+    updatedAt: serverTimestamp(),
+  });
+
+  await createModerationLogEntry({
+    actorUserId: normalizedActorUserId,
+    action: nextPinned ? "pin_group_post" : "unpin_group_post",
+    targetType: "post",
+    targetId: normalizedPostId,
+    details: {
+      groupId: post.groupId,
+      pinned: nextPinned,
+    },
+  });
 }
 
 export async function reportPost(postId, reporterUserId, reason = "") {
@@ -1714,7 +2342,7 @@ export async function getModerationLogs() {
 }
 
 export async function getGroups() {
-  const groups = await getCollectionRecords("groups", { orderField: "createdAt", orderDirection: "desc", limitCount: 120 });
+  const groups = await getCollectionRecords("groups");
   return sortGroupsByActivity(groups.map((group) => normalizeGroupRecord(group)));
 }
 
@@ -1737,11 +2365,19 @@ export async function joinGroup(groupId, userId) {
     throw new Error("Missing group or user id");
   }
 
-  await setDoc(doc(firestore, "groups", normalizedGroupId), {
+  const groupRef = doc(firestore, "groups", normalizedGroupId);
+  const groupSnap = await getDoc(groupRef);
+  const nextPayload = {
     members: arrayUnion(normalizedUserId),
     memberUserIds: arrayUnion(normalizedUserId),
     updatedAt: serverTimestamp(),
-  }, { merge: true });
+  };
+
+  if (!groupSnap.exists() || !groupSnap.data()?.createdAt) {
+    nextPayload.createdAt = serverTimestamp();
+  }
+
+  await setDoc(groupRef, nextPayload, { merge: true });
 }
 
 export async function leaveGroup(groupId, userId) {
@@ -1836,6 +2472,95 @@ export function subscribeToGroupPostsForGroupIds(groupIds, onData, onError) {
   );
 }
 
+export function subscribeToUserNotifications(userId, onData, onError) {
+  const firestore = resolveDb();
+  const normalizedUserId = String(userId || "").trim();
+  if (!firestore || !normalizedUserId) {
+    onData?.([]);
+    return () => {};
+  }
+
+  return onSnapshot(
+    query(collection(firestore, "users", normalizedUserId, "notifications"), orderBy("createdAt", "desc"), limit(100)),
+    (snap) => {
+      onData?.(
+        snap.docs.map((notificationDoc) => normalizeUserNotificationRecord({
+          id: notificationDoc.id,
+          ...notificationDoc.data(),
+        }))
+      );
+    },
+    onError
+  );
+}
+
+export async function markUserNotificationAsRead(userId, notificationId) {
+  const firestore = requireDb();
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedNotificationId = String(notificationId || "").trim();
+  if (!normalizedUserId || !normalizedNotificationId) {
+    throw new Error("Missing notification id");
+  }
+
+  await setDoc(doc(firestore, "users", normalizedUserId, "notifications", normalizedNotificationId), {
+    read: true,
+    readAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function markAllUserNotificationsAsRead(userId) {
+  const firestore = requireDb();
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) {
+    throw new Error("Missing user id");
+  }
+
+  const notificationsSnap = await getDocs(collection(firestore, "users", normalizedUserId, "notifications"));
+  const unreadDocs = notificationsSnap.docs.filter((notificationDoc) => !notificationDoc.data()?.read);
+
+  for (const notificationChunk of chunkValues(unreadDocs, 300)) {
+    const batch = writeBatch(firestore);
+    notificationChunk.forEach((notificationDoc) => {
+      batch.set(notificationDoc.ref, {
+        read: true,
+        readAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    });
+    await batch.commit();
+  }
+}
+
+export async function deleteUserNotification(userId, notificationId) {
+  const firestore = requireDb();
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedNotificationId = String(notificationId || "").trim();
+  if (!normalizedUserId || !normalizedNotificationId) {
+    throw new Error("Missing notification id");
+  }
+
+  await deleteDoc(doc(firestore, "users", normalizedUserId, "notifications", normalizedNotificationId));
+}
+
+export async function clearUserNotifications(userId) {
+  const firestore = requireDb();
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) {
+    throw new Error("Missing user id");
+  }
+
+  const notificationsSnap = await getDocs(collection(firestore, "users", normalizedUserId, "notifications"));
+
+  for (const notificationChunk of chunkValues(notificationsSnap.docs, 300)) {
+    const batch = writeBatch(firestore);
+    notificationChunk.forEach((notificationDoc) => {
+      batch.delete(notificationDoc.ref);
+    });
+    await batch.commit();
+  }
+}
+
 export function subscribeToConversationMessages(conversationId, onData, onError) {
   const firestore = resolveDb();
   const normalizedConversationId = String(conversationId || "").trim();
@@ -1845,7 +2570,7 @@ export function subscribeToConversationMessages(conversationId, onData, onError)
   }
 
   return onSnapshot(
-    query(collection(firestore, "conversations", normalizedConversationId, "messages"), orderBy("timestamp", "asc")),
+    query(collection(firestore, "conversations", normalizedConversationId, "messages"), orderBy("timestamp", "asc"), limitToLast(100)),
     (snap) => {
       onData?.(snap.docs.map((messageDoc) => ({ id: messageDoc.id, ...messageDoc.data() })));
     },
@@ -1861,30 +2586,79 @@ export function subscribeToUserConversationRequests(userId, onData, onError) {
     return () => {};
   }
 
-  return onSnapshot(
-    query(collection(firestore, "conversation_requests"), orderBy("createdAt", "desc")),
+  let sentRequests = [];
+  let receivedRequests = [];
+  let hasSent = false;
+  let hasReceived = false;
+
+  const emit = () => {
+    if (!hasSent || !hasReceived) return;
+    const seen = new Set();
+    const merged = [];
+    for (const r of [...sentRequests, ...receivedRequests]) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      if (String(r?.status || "pending").trim() === "pending") {
+        merged.push(r);
+      }
+    }
+    merged.sort((a, b) => {
+      const ta = typeof a.createdAt?.toMillis === "function" ? a.createdAt.toMillis() : 0;
+      const tb = typeof b.createdAt?.toMillis === "function" ? b.createdAt.toMillis() : 0;
+      return tb - ta;
+    });
+    onData?.(merged);
+  };
+
+  const unsubSent = onSnapshot(
+    query(collection(firestore, "conversation_requests"), where("requesterId", "==", normalizedUserId)),
     (snap) => {
-      const requests = snap.docs
-        .map((requestDoc) => ({ id: requestDoc.id, ...requestDoc.data() }))
-        .filter((request) => request.requesterId === normalizedUserId || request.recipientId === normalizedUserId)
-        .filter((request) => String(request?.status || "pending").trim() === "pending");
-      onData?.(requests);
+      sentRequests = snap.docs.map((requestDoc) => ({ id: requestDoc.id, ...requestDoc.data() }));
+      hasSent = true;
+      emit();
     },
     onError
   );
+
+  const unsubReceived = onSnapshot(
+    query(collection(firestore, "conversation_requests"), where("recipientId", "==", normalizedUserId)),
+    (snap) => {
+      receivedRequests = snap.docs.map((requestDoc) => ({ id: requestDoc.id, ...requestDoc.data() }));
+      hasReceived = true;
+      emit();
+    },
+    onError
+  );
+
+  return () => {
+    unsubSent();
+    unsubReceived();
+  };
 }
 
 export async function createConversationRequest(data = {}) {
   const firestore = requireDb();
-  const fromUserId = String(data?.fromUserId || data?.requesterId || "").trim();
-  const toUserId = String(data?.toUserId || data?.recipientId || "").trim();
+  const fromUserId = String(data?.fromUserId || "").trim();
+  const toUserId = String(data?.toUserId || "").trim();
   if (!fromUserId || !toUserId) {
     throw new Error("Missing conversation request participants");
   }
 
-  await assertUsersCanInteract(fromUserId, toUserId);
+  try {
+    await assertUsersCanInteract(fromUserId, toUserId);
+  } catch (error) {
+    if (["blocked_user", "blocked_by_user", "sender_messaging_restricted", "recipient_messaging_restricted"].includes(String(error?.message || "").trim())) {
+      throw error;
+    }
+    throw createConversationRequestStageError("interaction_check", error);
+  }
 
-  const existingConversation = await findExistingDirectConversation([fromUserId, toUserId]);
+  let existingConversation = null;
+  try {
+    existingConversation = await findExistingDirectConversation([fromUserId, toUserId]);
+  } catch (error) {
+    throw createConversationRequestStageError("existing_conversation_lookup", error);
+  }
   if (existingConversation?.id) {
     return {
       status: "existing_conversation",
@@ -1892,8 +2666,21 @@ export async function createConversationRequest(data = {}) {
     };
   }
 
-  const requestsSnap = await getDocs(collection(firestore, "conversation_requests"));
-  const matchingRequests = requestsSnap.docs.filter((requestDoc) => {
+  let outgoingRequestsSnap;
+  let incomingRequestsSnap;
+  try {
+    [outgoingRequestsSnap, incomingRequestsSnap] = await Promise.all([
+      getDocs(
+        query(collection(firestore, "conversation_requests"), where("requesterId", "==", fromUserId))
+      ),
+      getDocs(
+        query(collection(firestore, "conversation_requests"), where("recipientId", "==", fromUserId))
+      ),
+    ]);
+  } catch (error) {
+    throw createConversationRequestStageError("request_history_lookup", error);
+  }
+  const matchingRequests = [...outgoingRequestsSnap.docs, ...incomingRequestsSnap.docs].filter((requestDoc) => {
     const request = requestDoc.data() || {};
     return (
       ((request.requesterId === fromUserId && request.recipientId === toUserId)
@@ -1903,7 +2690,14 @@ export async function createConversationRequest(data = {}) {
   const latestRequestDoc = matchingRequests
     .sort((a, b) => getTimestampValue(b.data()?.updatedAt || b.data()?.createdAt) - getTimestampValue(a.data()?.updatedAt || a.data()?.createdAt))[0];
 
-  await assertConversationRequestNotRateLimited(latestRequestDoc, fromUserId);
+  try {
+    await assertConversationRequestNotRateLimited(latestRequestDoc, fromUserId);
+  } catch (error) {
+    if (String(error?.message || "").trim() === "conversation_request_rate_limited") {
+      throw error;
+    }
+    throw createConversationRequestStageError("rate_limit_check", error);
+  }
 
   if (latestRequestDoc?.data()?.status === "pending") {
     return {
@@ -1912,8 +2706,17 @@ export async function createConversationRequest(data = {}) {
     };
   }
 
-  const [fromProfile, toProfile] = await Promise.all([getUserProfile(fromUserId), getUserProfile(toUserId)]);
-  const ref = await addDoc(collection(firestore, "conversation_requests"), {
+  let fromProfile;
+  let toProfile;
+  try {
+    [fromProfile, toProfile] = await Promise.all([getUserProfile(fromUserId), getUserProfile(toUserId)]);
+  } catch (error) {
+    throw createConversationRequestStageError("profile_lookup", error);
+  }
+
+  let ref;
+  try {
+    ref = await addDoc(collection(firestore, "conversation_requests"), {
     requesterId: fromUserId,
     requesterName: String(data?.requesterName || fromProfile?.name || fromProfile?.displayName || "Utilisateur").trim(),
     requesterPhoto: String(fromProfile?.photo || fromProfile?.photoURL || "").trim(),
@@ -1925,6 +2728,9 @@ export async function createConversationRequest(data = {}) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+  } catch (error) {
+    throw createConversationRequestStageError("create_request", error);
+  }
 
   return {
     status: "created",
@@ -1956,6 +2762,582 @@ export async function declineConversationRequest(requestId) {
     status: "declined",
     updatedAt: serverTimestamp(),
   });
+}
+
+function normalizeConversationCallRecord(record = {}) {
+  return {
+    ...record,
+    id: String(record?.id || record?.conversationId || "").trim(),
+    conversationId: String(record?.conversationId || record?.id || "").trim(),
+    callerId: String(record?.callerId || "").trim(),
+    calleeId: String(record?.calleeId || "").trim(),
+    channelName: String(record?.channelName || "").trim(),
+    callType: String(record?.callType || "audio").trim().toLowerCase() || "audio",
+    status: String(record?.status || "idle").trim().toLowerCase(),
+    missedAt: record?.missedAt || null,
+    participants: Array.isArray(record?.participants)
+      ? [...new Set(record.participants.map((participantId) => String(participantId || "").trim()).filter(Boolean))]
+      : [],
+  };
+}
+
+function serializeChessBoard(board = []) {
+  return Array.isArray(board)
+    ? board.map((row) => ({
+      cells: Array.isArray(row)
+        ? row.map((piece) => (piece && typeof piece === "object"
+          ? stripUndefinedFields({
+            color: String(piece.color || "").trim(),
+            type: String(piece.type || "").trim(),
+          })
+          : null))
+        : [],
+    }))
+    : [];
+}
+
+function deserializeChessBoard(board = []) {
+  if (!Array.isArray(board)) {
+    return [];
+  }
+
+  if (board.every((row) => Array.isArray(row))) {
+    return board.map((row) => row.map((piece) => (piece && typeof piece === "object" ? {
+      color: String(piece.color || "").trim(),
+      type: String(piece.type || "").trim(),
+    } : null)));
+  }
+
+  return board.map((row) => {
+    const cells = Array.isArray(row?.cells) ? row.cells : [];
+    return cells.map((piece) => (piece && typeof piece === "object" ? {
+      color: String(piece.color || "").trim(),
+      type: String(piece.type || "").trim(),
+    } : null));
+  });
+}
+
+function normalizeChessGameRecord(record = {}) {
+  const participants = Array.isArray(record?.participants)
+    ? [...new Set(record.participants.map((participantId) => String(participantId || "").trim()).filter(Boolean))]
+    : [];
+
+  return {
+    ...record,
+    id: String(record?.id || "").trim(),
+    hostId: String(record?.hostId || "").trim(),
+    guestId: String(record?.guestId || "").trim(),
+    participants,
+    status: String(record?.status || "pending").trim().toLowerCase(),
+    turn: String(record?.turn || "white").trim().toLowerCase() || "white",
+    board: deserializeChessBoard(record?.board),
+    boardMessage: String(record?.boardMessage || "").trim(),
+    participantNames: record?.participantNames && typeof record.participantNames === "object" ? record.participantNames : {},
+    playerColorByUserId: record?.playerColorByUserId && typeof record.playerColorByUserId === "object" ? record.playerColorByUserId : {},
+    lastMove: record?.lastMove && typeof record.lastMove === "object" ? record.lastMove : null,
+  };
+}
+
+function areChessBoardsEqual(leftBoard, rightBoard) {
+  return JSON.stringify(serializeChessBoard(leftBoard)) === JSON.stringify(serializeChessBoard(rightBoard));
+}
+
+async function findExistingChessGameSessionForParticipants(firestore, participantAId, participantBId) {
+  const normalizedParticipantAId = String(participantAId || "").trim();
+  const normalizedParticipantBId = String(participantBId || "").trim();
+
+  if (!firestore || !normalizedParticipantAId || !normalizedParticipantBId) {
+    return null;
+  }
+
+  const snap = await getDocs(
+    query(collection(firestore, "chessGames"), where("participants", "array-contains", normalizedParticipantAId))
+  );
+
+  const matchingGames = snap.docs
+    .map((gameDoc) => normalizeChessGameRecord({ id: gameDoc.id, ...gameDoc.data() }))
+    .filter((game) => game.participants.includes(normalizedParticipantBId))
+    .sort((a, b) => getTimestampValue(b?.updatedAt || b?.createdAt) - getTimestampValue(a?.updatedAt || a?.createdAt));
+
+  return matchingGames[0] || null;
+}
+
+export async function createChessGameSession(data = {}) {
+  const firestore = requireDb();
+  const hostId = String(data?.hostId || "").trim();
+  const guestId = String(data?.guestId || "").trim();
+
+  if (!hostId || !guestId || hostId === guestId) {
+    throw new Error("invalid_chess_game_participants");
+  }
+
+  try {
+    await assertUsersCanInteract(hostId, guestId);
+  } catch (error) {
+    throw createChessStageError("interaction_check", error);
+  }
+
+  let hostProfile = null;
+  let guestProfile = null;
+
+  try {
+    [hostProfile, guestProfile] = await Promise.all([
+      getUserProfile(hostId),
+      getUserProfile(guestId),
+    ]);
+  } catch (error) {
+    throw createChessStageError("profile_lookup", error);
+  }
+
+  const participantNames = {
+    [hostId]: String(data?.hostName || hostProfile?.name || hostProfile?.displayName || "Joueur 1").trim(),
+    [guestId]: String(data?.guestName || guestProfile?.name || guestProfile?.displayName || "Joueur 2").trim(),
+  };
+
+  const participants = [hostId, guestId];
+  try {
+    const existingGame = await findExistingChessGameSessionForParticipants(firestore, hostId, guestId);
+    if (existingGame?.id) {
+      return existingGame.id;
+    }
+
+    const chessGameId = buildParticipantsKey(participants);
+    const gameRef = doc(firestore, "chessGames", chessGameId);
+    await setDoc(gameRef, {
+      hostId,
+      guestId,
+      participants,
+      participantNames,
+      playerColorByUserId: {
+        [hostId]: "white",
+        [guestId]: "black",
+      },
+      board: serializeChessBoard(data?.board),
+      turn: String(data?.turn || "white").trim().toLowerCase() || "white",
+      boardMessage: String(data?.boardMessage || "").trim(),
+      lastMove: data?.lastMove && typeof data.lastMove === "object" ? data.lastMove : null,
+      status: String(data?.status || "pending").trim().toLowerCase() || "pending",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return gameRef.id;
+  } catch (error) {
+    throw createChessStageError("create_game_document", error);
+  }
+}
+
+export async function createChessInviteNotification(data = {}) {
+  const firestore = requireDb();
+  const senderId = String(data?.senderId || "").trim();
+  const recipientId = String(data?.recipientId || "").trim();
+  const gameId = String(data?.gameId || "").trim();
+  const senderName = String(data?.senderName || "Utilisateur").trim() || "Utilisateur";
+
+  if (!senderId || !recipientId || !gameId || senderId === recipientId) {
+    throw new Error("invalid_chess_invitation_notification");
+  }
+
+  await addDoc(collection(firestore, "users", recipientId, "notifications"), {
+    type: "chess",
+    title: "",
+    message: "",
+    link: "/games#chess-game",
+    read: false,
+    data: {
+      gameId,
+      senderId,
+      senderName,
+    },
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function commitChessGameMove(gameId, data = {}) {
+  const firestore = requireDb();
+  const normalizedGameId = String(gameId || "").trim();
+  const currentUserId = String(getFirebaseAuth()?.currentUser?.uid || "").trim();
+  const normalizedNextTurn = String(data?.turn || "").trim().toLowerCase();
+  const normalizedStatus = String(data?.status || "active").trim().toLowerCase() || "active";
+  const nextBoard = Array.isArray(data?.board) ? data.board : null;
+  const expectedBoard = Array.isArray(data?.expectedBoard) ? data.expectedBoard : null;
+  const nextLastMove = data?.lastMove === null || (data?.lastMove && typeof data.lastMove === "object")
+    ? data.lastMove
+    : null;
+
+  if (!normalizedGameId) {
+    throw new Error("missing_chess_game_id");
+  }
+
+  if (!currentUserId) {
+    throw new Error("login_required");
+  }
+
+  if (!nextBoard) {
+    throw new Error("missing_chess_board");
+  }
+
+  if (!normalizedNextTurn) {
+    throw new Error("missing_chess_turn");
+  }
+
+  const gameRef = doc(firestore, "chessGames", normalizedGameId);
+  return runTransaction(firestore, async (transaction) => {
+    const gameSnap = await transaction.get(gameRef);
+
+    if (!gameSnap.exists()) {
+      throw new Error("chess_game_not_found");
+    }
+
+    const game = normalizeChessGameRecord({ id: gameSnap.id, ...gameSnap.data() });
+    if (!game.participants.includes(currentUserId)) {
+      throw new Error("chess_game_access_denied");
+    }
+
+    const currentUserColor = String(game.playerColorByUserId?.[currentUserId] || "").trim().toLowerCase();
+    if (!currentUserColor) {
+      throw new Error("chess_game_access_denied");
+    }
+
+    if (game.turn !== currentUserColor || normalizedNextTurn === game.turn) {
+      throw new Error("chess_game_turn_conflict");
+    }
+
+    if (expectedBoard && !areChessBoardsEqual(game.board, expectedBoard)) {
+      throw new Error("chess_game_state_conflict");
+    }
+
+    transaction.update(gameRef, {
+      board: serializeChessBoard(nextBoard),
+      turn: normalizedNextTurn,
+      boardMessage: typeof data?.boardMessage === "string" ? data.boardMessage.trim() : "",
+      lastMove: nextLastMove,
+      status: normalizedStatus,
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      ...game,
+      board: nextBoard,
+      turn: normalizedNextTurn,
+      boardMessage: typeof data?.boardMessage === "string" ? data.boardMessage.trim() : "",
+      lastMove: nextLastMove,
+      status: normalizedStatus,
+    };
+  });
+}
+
+export async function updateChessGameSession(gameId, data = {}) {
+  const firestore = requireDb();
+  const normalizedGameId = String(gameId || "").trim();
+
+  if (!normalizedGameId) {
+    throw new Error("missing_chess_game_id");
+  }
+
+  const gameRef = doc(firestore, "chessGames", normalizedGameId);
+  const gameSnap = await getDoc(gameRef);
+  if (!gameSnap.exists()) {
+    throw new Error("chess_game_not_found");
+  }
+
+  const game = normalizeChessGameRecord({ id: gameSnap.id, ...gameSnap.data() });
+  const currentUserId = String(getFirebaseAuth()?.currentUser?.uid || "").trim();
+
+  if (currentUserId && !game.participants.includes(currentUserId)) {
+    throw new Error("chess_game_access_denied");
+  }
+
+  const nextPayload = {
+    updatedAt: serverTimestamp(),
+  };
+
+  if (Array.isArray(data?.board)) {
+    nextPayload.board = serializeChessBoard(data.board);
+  }
+
+  if (typeof data?.turn === "string" && data.turn.trim()) {
+    nextPayload.turn = data.turn.trim().toLowerCase();
+  }
+
+  if (typeof data?.boardMessage === "string") {
+    nextPayload.boardMessage = data.boardMessage.trim();
+  }
+
+  if (data?.lastMove === null || (data?.lastMove && typeof data.lastMove === "object")) {
+    nextPayload.lastMove = data.lastMove;
+  }
+
+  if (typeof data?.status === "string" && data.status.trim()) {
+    nextPayload.status = data.status.trim().toLowerCase();
+  }
+
+  await updateDoc(gameRef, nextPayload);
+}
+
+export function subscribeToChessGameSession(gameId, userId, onData, onError) {
+  const firestore = resolveDb();
+  const normalizedGameId = String(gameId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+
+  if (!firestore || !normalizedGameId || !normalizedUserId) {
+    onData?.(null);
+    return () => {};
+  }
+
+  return onSnapshot(
+    doc(firestore, "chessGames", normalizedGameId),
+    (snap) => {
+      if (!snap.exists()) {
+        onData?.(null);
+        return;
+      }
+
+      const game = normalizeChessGameRecord({ id: snap.id, ...snap.data() });
+      if (!game.participants.includes(normalizedUserId)) {
+        onData?.(null);
+        return;
+      }
+
+      onData?.(game);
+    },
+    onError
+  );
+}
+
+export function subscribeToUserChessGames(userId, onData, onError) {
+  const firestore = resolveDb();
+  const normalizedUserId = String(userId || "").trim();
+
+  if (!firestore || !normalizedUserId) {
+    onData?.([]);
+    return () => {};
+  }
+
+  return onSnapshot(
+    query(collection(firestore, "chessGames"), where("participants", "array-contains", normalizedUserId)),
+    (snap) => {
+      const games = snap.docs
+        .map((gameDoc) => normalizeChessGameRecord({ id: gameDoc.id, ...gameDoc.data() }))
+        .sort((a, b) => getTimestampValue(b?.updatedAt || b?.createdAt) - getTimestampValue(a?.updatedAt || a?.createdAt));
+
+      onData?.(games);
+    },
+    onError
+  );
+}
+
+export async function startConversationCall(data = {}) {
+  const firestore = requireDb();
+  const conversationId = String(data?.conversationId || "").trim();
+  const callerId = String(data?.callerId || "").trim();
+  const calleeId = String(data?.calleeId || "").trim();
+
+  if (!conversationId || !callerId || !calleeId) {
+    throw new Error("missing_conversation_call_participants");
+  }
+
+  await assertUsersCanInteract(callerId, calleeId);
+
+  const conversationRef = doc(firestore, "conversations", conversationId);
+  const conversationSnap = await getDoc(conversationRef);
+  if (!conversationSnap.exists()) {
+    throw new Error("conversation_not_found");
+  }
+
+  const conversation = conversationSnap.data() || {};
+  const participants = Array.isArray(conversation?.participants)
+    ? conversation.participants.map((participantId) => String(participantId || "").trim()).filter(Boolean)
+    : [];
+
+  if (!participants.includes(callerId) || !participants.includes(calleeId)) {
+    throw new Error("call_participant_not_in_conversation");
+  }
+
+  const callRef = doc(firestore, "conversationCalls", conversationId);
+  let existingCallSnap = null;
+  try {
+    existingCallSnap = await getDoc(callRef);
+  } catch (err) {
+    if (!String(err?.code || "").includes("permission-denied")) {
+      throw err;
+    }
+  }
+
+  if (existingCallSnap?.exists()) {
+    const existingCall = normalizeConversationCallRecord({ id: existingCallSnap.id, ...existingCallSnap.data() });
+    if (["ringing", "active"].includes(existingCall.status) && existingCall.channelName) {
+      return existingCall;
+    }
+  }
+
+  const channelName = String(data?.channelName || `call_${conversationId}_${Date.now()}`).trim();
+  const payload = {
+    conversationId,
+    participants: [callerId, calleeId],
+    callerId,
+    calleeId,
+    channelName,
+    callType: "audio",
+    status: "ringing",
+    initiatedAt: serverTimestamp(),
+    answeredAt: null,
+    declinedAt: null,
+    missedAt: null,
+    endedAt: null,
+    answeredBy: "",
+    declinedBy: "",
+    endedBy: "",
+    updatedAt: serverTimestamp(),
+  };
+
+  await setDoc(callRef, payload, { merge: true });
+
+  return normalizeConversationCallRecord({
+    id: conversationId,
+    ...payload,
+  });
+}
+
+export async function acceptConversationCall(conversationId, userId) {
+  const firestore = requireDb();
+  const normalizedConversationId = String(conversationId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  const callRef = doc(firestore, "conversationCalls", normalizedConversationId);
+  const callSnap = await getDoc(callRef);
+
+  if (!callSnap.exists()) {
+    throw new Error("conversation_call_not_found");
+  }
+
+  const call = normalizeConversationCallRecord({ id: callSnap.id, ...callSnap.data() });
+  if (!call.participants.includes(normalizedUserId)) {
+    throw new Error("unauthorized_conversation_call_participant");
+  }
+
+  await updateDoc(callRef, {
+    status: "active",
+    answeredBy: normalizedUserId,
+    declinedBy: "",
+    endedBy: "",
+    answeredAt: serverTimestamp(),
+    declinedAt: null,
+    missedAt: null,
+    endedAt: null,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function declineConversationCall(conversationId, userId) {
+  const firestore = requireDb();
+  const normalizedConversationId = String(conversationId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  const callRef = doc(firestore, "conversationCalls", normalizedConversationId);
+  const callSnap = await getDoc(callRef);
+
+  if (!callSnap.exists()) {
+    throw new Error("conversation_call_not_found");
+  }
+
+  const call = normalizeConversationCallRecord({ id: callSnap.id, ...callSnap.data() });
+  if (!call.participants.includes(normalizedUserId)) {
+    throw new Error("unauthorized_conversation_call_participant");
+  }
+
+  await updateDoc(callRef, {
+    status: "declined",
+    declinedBy: normalizedUserId,
+    endedBy: "",
+    declinedAt: serverTimestamp(),
+    missedAt: null,
+    endedAt: null,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function endConversationCall(conversationId, userId) {
+  const firestore = requireDb();
+  const normalizedConversationId = String(conversationId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  const callRef = doc(firestore, "conversationCalls", normalizedConversationId);
+  const callSnap = await getDoc(callRef);
+
+  if (!callSnap.exists()) {
+    return;
+  }
+
+  const call = normalizeConversationCallRecord({ id: callSnap.id, ...callSnap.data() });
+  if (!call.participants.includes(normalizedUserId)) {
+    throw new Error("unauthorized_conversation_call_participant");
+  }
+
+  const shouldMarkAsMissed = call.status === "ringing"
+    && !call.answeredAt
+    && normalizedUserId === call.callerId;
+
+  await updateDoc(callRef, {
+    status: shouldMarkAsMissed ? "missed" : "ended",
+    endedBy: normalizedUserId,
+    missedAt: shouldMarkAsMissed ? serverTimestamp() : null,
+    endedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export function subscribeToUserConversationCalls(userId, onData, onError) {
+  const firestore = resolveDb();
+  const normalizedUserId = String(userId || "").trim();
+  if (!firestore || !normalizedUserId) {
+    onData?.([]);
+    return () => {};
+  }
+
+  return onSnapshot(
+    query(collection(firestore, "conversationCalls"), where("participants", "array-contains", normalizedUserId)),
+    (snap) => {
+      const calls = snap.docs
+        .map((callDoc) => normalizeConversationCallRecord({ id: callDoc.id, ...callDoc.data() }))
+        .filter((call) => ["ringing", "active", "missed"].includes(call.status))
+        .sort((a, b) => getTimestampValue(b.updatedAt) - getTimestampValue(a.updatedAt));
+      onData?.(calls);
+    },
+    onError
+  );
+}
+
+export async function getUserConversationCalls(userId) {
+  const firestore = resolveDb();
+  const normalizedUserId = String(userId || "").trim();
+  if (!firestore || !normalizedUserId) {
+    return [];
+  }
+
+  const snap = await getDocs(
+    query(collection(firestore, "conversationCalls"), where("participants", "array-contains", normalizedUserId))
+  );
+
+  return snap.docs
+    .map((callDoc) => normalizeConversationCallRecord({ id: callDoc.id, ...callDoc.data() }))
+    .filter((call) => ["ringing", "active", "missed"].includes(call.status))
+    .sort((a, b) => getTimestampValue(b.updatedAt) - getTimestampValue(a.updatedAt));
+}
+
+export function subscribeToConversationCall(conversationId, onData, onError) {
+  const firestore = resolveDb();
+  const normalizedConversationId = String(conversationId || "").trim();
+  if (!firestore || !normalizedConversationId) {
+    onData?.(null);
+    return () => {};
+  }
+
+  return onSnapshot(
+    doc(firestore, "conversationCalls", normalizedConversationId),
+    (callSnap) => {
+      onData?.(callSnap.exists() ? normalizeConversationCallRecord({ id: callSnap.id, ...callSnap.data() }) : null);
+    },
+    onError
+  );
 }
 
 export async function blockUser(userId, targetUserId) {
@@ -2055,6 +3437,21 @@ export async function getAllShopItems() {
   return items.map((item) => normalizeShopItemRecord(item));
 }
 
+export async function getShopItemById(itemId) {
+  const firestore = resolveDb();
+  const normalizedItemId = String(itemId || "").trim();
+  if (!firestore || !normalizedItemId) {
+    return null;
+  }
+
+  const snap = await getDoc(doc(firestore, "shopItems", normalizedItemId));
+  if (!snap.exists()) {
+    return null;
+  }
+
+  return normalizeShopItemRecord({ id: snap.id, ...snap.data() });
+}
+
  export async function getShopItems() {
    return (await getAllShopItems()).filter(
      (item) => String(item?.status || "available").trim().toLowerCase() === "available"
@@ -2131,20 +3528,68 @@ export async function updateShopOrder(orderId, data = {}) {
 }
 
 export async function getShopOrders() {
-  const orders = await getCollectionRecords("shopOrders", { orderField: "createdAt", orderDirection: "desc" });
-  return orders.map((order) => normalizeShopOrderRecord(order));
+  const firestore = resolveDb();
+  if (!firestore) {
+    return [];
+  }
+
+  const snap = await getDocs(query(collection(firestore, "shopOrders"), orderBy("createdAt", "desc")));
+  return snap.docs.map((orderDoc) => normalizeShopOrderRecord({ id: orderDoc.id, ...orderDoc.data() }));
 }
 
 export async function getBuyerShopOrders(userId) {
+  const firestore = resolveDb();
   const normalizedUserId = String(userId || "").trim();
-  const orders = await getShopOrders();
-  return orders.filter((order) => String(order?.buyerId || "").trim() === normalizedUserId);
+  if (!firestore || !normalizedUserId) {
+    return [];
+  }
+
+  const snap = await getDocs(
+    query(
+      collection(firestore, "shopOrders"),
+      where("buyerId", "==", normalizedUserId),
+      orderBy("createdAt", "desc")
+    )
+  );
+
+  return snap.docs.map((orderDoc) => normalizeShopOrderRecord({ id: orderDoc.id, ...orderDoc.data() }));
 }
 
 export async function getSellerShopOrders(userId) {
+  const firestore = resolveDb();
   const normalizedUserId = String(userId || "").trim();
-  const orders = await getShopOrders();
-  return orders.filter((order) => String(order?.sellerId || order?.authorId || "").trim() === normalizedUserId);
+  if (!firestore || !normalizedUserId) {
+    return [];
+  }
+
+  const [sellerSnap, authorSnap] = await Promise.all([
+    getDocs(
+      query(
+        collection(firestore, "shopOrders"),
+        where("sellerId", "==", normalizedUserId),
+        orderBy("createdAt", "desc")
+      )
+    ),
+    getDocs(
+      query(
+        collection(firestore, "shopOrders"),
+        where("authorId", "==", normalizedUserId),
+        orderBy("createdAt", "desc")
+      )
+    ),
+  ]);
+
+  const mergedOrders = new Map();
+
+  for (const orderDoc of [...sellerSnap.docs, ...authorSnap.docs]) {
+    mergedOrders.set(orderDoc.id, normalizeShopOrderRecord({ id: orderDoc.id, ...orderDoc.data() }));
+  }
+
+  return Array.from(mergedOrders.values()).sort((a, b) => {
+    const left = getTimestampValue(a?.createdAt);
+    const right = getTimestampValue(b?.createdAt);
+    return right - left;
+  });
 }
 
 export async function requestShopOrderAction(orderId, data = {}) {
@@ -2166,10 +3611,37 @@ export async function requestShopOrderAction(orderId, data = {}) {
 }
 
 export async function getDoctorProfiles(options = {}) {
-  const profiles = await getCollectionRecords("doctor_profiles", { orderField: "createdAt", orderDirection: "desc" });
-  return profiles
-    .map((profile) => ({ id: profile.id, ...profile }))
-    .filter((profile) => options?.publishedOnly ? profile.published !== false : true);
+  const firestore = resolveDb();
+  if (!firestore) {
+    return [];
+  }
+
+  const doctorProfilesCollection = collection(firestore, "doctor_profiles");
+  const mapProfiles = (docs = []) => docs.map((profileDoc) => ({ id: profileDoc.id, ...profileDoc.data() }));
+
+  if (options?.publishedOnly) {
+    try {
+      const profilesSnap = await getDocs(
+        query(
+          doctorProfilesCollection,
+          where("published", "==", true),
+          orderBy("createdAt", "desc")
+        )
+      );
+
+      return mapProfiles(profilesSnap.docs);
+    } catch (error) {
+      if (!isFirestoreQueryIndexError(error)) {
+        throw error;
+      }
+
+      const fallbackSnap = await getDocs(doctorProfilesCollection);
+      return sortByCreatedAtDesc(mapProfiles(fallbackSnap.docs).filter((profile) => profile?.published === true));
+    }
+  }
+
+  const profilesSnap = await getDocs(query(doctorProfilesCollection, orderBy("createdAt", "desc")));
+  return mapProfiles(profilesSnap.docs);
 }
 
 export async function getDoctorProfileByEditor(editorUserId) {
@@ -2278,17 +3750,46 @@ export async function saveDoctorProfile(data = {}, editorUserId = "") {
 }
 
 export async function getDoctorArticles(options = {}) {
-  const articles = await getCollectionRecords("doctor_articles", { orderField: "createdAt", orderDirection: "desc" });
+  const firestore = resolveDb();
+  if (!firestore) {
+    return [];
+  }
+
   const normalizedAuthorId = String(options?.authorId || "").trim();
-  return articles.filter((article) => {
-    if (options?.publishedOnly && article.published === false) {
+  const constraints = [orderBy("createdAt", "desc")];
+  const doctorArticlesCollection = collection(firestore, "doctor_articles");
+  const mapArticles = (docs = []) => docs.map((articleDoc) => ({ id: articleDoc.id, ...articleDoc.data() }));
+  const matchesArticleFilters = (article) => {
+    if (options?.publishedOnly && (!article?.published || !article?.validated)) {
       return false;
     }
+
     if (normalizedAuthorId && String(article?.authorId || "").trim() !== normalizedAuthorId) {
       return false;
     }
+
     return true;
-  });
+  };
+
+  if (options?.publishedOnly) {
+    constraints.unshift(where("published", "==", true), where("validated", "==", true));
+  }
+
+  if (normalizedAuthorId) {
+    constraints.unshift(where("authorId", "==", normalizedAuthorId));
+  }
+
+  try {
+    const snap = await getDocs(query(doctorArticlesCollection, ...constraints));
+    return mapArticles(snap.docs);
+  } catch (error) {
+    if (!isFirestoreQueryIndexError(error)) {
+      throw error;
+    }
+
+    const fallbackSnap = await getDocs(doctorArticlesCollection);
+    return sortByCreatedAtDesc(mapArticles(fallbackSnap.docs).filter(matchesArticleFilters));
+  }
 }
 
 export async function saveDoctorArticle(data = {}, editorUserId = "") {
@@ -2316,17 +3817,46 @@ export async function deleteDoctorArticle(articleId) {
 }
 
 export async function getDoctorVideos(options = {}) {
-  const videos = await getCollectionRecords("doctor_videos", { orderField: "createdAt", orderDirection: "desc" });
+  const firestore = resolveDb();
+  if (!firestore) {
+    return [];
+  }
+
   const normalizedAuthorId = String(options?.authorId || "").trim();
-  return videos.filter((video) => {
-    if (options?.publishedOnly && video.published === false) {
+  const constraints = [orderBy("createdAt", "desc")];
+  const doctorVideosCollection = collection(firestore, "doctor_videos");
+  const mapVideos = (docs = []) => docs.map((videoDoc) => ({ id: videoDoc.id, ...videoDoc.data() }));
+  const matchesVideoFilters = (video) => {
+    if (options?.publishedOnly && (!video?.published || !video?.validated)) {
       return false;
     }
+
     if (normalizedAuthorId && String(video?.authorId || "").trim() !== normalizedAuthorId) {
       return false;
     }
+
     return true;
-  });
+  };
+
+  if (options?.publishedOnly) {
+    constraints.unshift(where("published", "==", true), where("validated", "==", true));
+  }
+
+  if (normalizedAuthorId) {
+    constraints.unshift(where("authorId", "==", normalizedAuthorId));
+  }
+
+  try {
+    const snap = await getDocs(query(doctorVideosCollection, ...constraints));
+    return mapVideos(snap.docs);
+  } catch (error) {
+    if (!isFirestoreQueryIndexError(error)) {
+      throw error;
+    }
+
+    const fallbackSnap = await getDocs(doctorVideosCollection);
+    return sortByCreatedAtDesc(mapVideos(fallbackSnap.docs).filter(matchesVideoFilters));
+  }
 }
 
 export async function saveDoctorVideo(data = {}, editorUserId = "") {
@@ -2398,6 +3928,55 @@ export async function saveQuizResult(userId, quizKey, data = {}) {
  export async function getGuides() {
    return await getCollectionRecords("guides", { orderField: "createdAt", orderDirection: "desc", limitCount: 100 });
  }
+
+export async function sendChessGameMessage(gameId, senderId, senderName, text) {
+  const firestore = requireDb();
+  const normalizedGameId = String(gameId || "").trim();
+  const normalizedSenderId = String(senderId || "").trim();
+  const normalizedText = String(text || "").trim();
+
+  if (!normalizedGameId || !normalizedSenderId || !normalizedText) {
+    throw new Error("missing_chess_chat_fields");
+  }
+
+  const gameSnap = await getDoc(doc(firestore, "chessGames", normalizedGameId));
+  if (!gameSnap.exists()) {
+    throw new Error("chess_game_not_found");
+  }
+
+  const game = normalizeChessGameRecord({ id: gameSnap.id, ...gameSnap.data() });
+  if (!game.participants.includes(normalizedSenderId)) {
+    throw new Error("chess_game_access_denied");
+  }
+
+  await addDoc(collection(firestore, "chessGames", normalizedGameId, "messages"), {
+    senderId: normalizedSenderId,
+    senderName: String(senderName || "Joueur").trim() || "Joueur",
+    text: normalizedText,
+    timestamp: serverTimestamp(),
+  });
+}
+
+export function subscribeToChessGameMessages(gameId, onData, onError) {
+  const firestore = resolveDb();
+  const normalizedGameId = String(gameId || "").trim();
+  if (!firestore || !normalizedGameId) {
+    onData?.([]);
+    return () => {};
+  }
+
+  return onSnapshot(
+    query(
+      collection(firestore, "chessGames", normalizedGameId, "messages"),
+      orderBy("timestamp", "asc"),
+      limitToLast(50)
+    ),
+    (snap) => {
+      onData?.(snap.docs.map((msgDoc) => ({ id: msgDoc.id, ...msgDoc.data() })));
+    },
+    onError
+  );
+}
 
  export async function saveUserFcmToken(userId, token) {
    const firestore = requireDb();

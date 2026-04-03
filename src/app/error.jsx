@@ -15,7 +15,7 @@ export default function Error({ error, reset }) {
       <div className="w-full max-w-lg rounded-[2rem] border border-rose-100 bg-white p-8 text-center shadow-sm">
         <h2 className="text-2xl font-semibold text-slate-900">Une erreur est survenue</h2>
         <p className="mt-3 text-sm text-slate-500">
-          Cette page a rencontré un problème. Vous pouvez réessayer sans quitter l'application.
+          Cette page a rencontré un problème. Vous pouvez réessayer sans quitter l&apos;application.
         </p>
         <button
           type="button"

@@ -350,7 +350,7 @@ export default function HelpPage() {
               {t("supportTeam") || "Notre équipe de support est là pour vous aider"}
             </p>
             <div className="flex flex-wrap gap-3 justify-center">
-              <a href="mailto:contact@lakou-manman.com" className="inline-flex">
+              <a href="mailto:contact@lakoumanman.com" className="inline-flex">
                 <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
                   {supportActions.email}
                 </Badge>
