@@ -31,6 +31,7 @@ import {
   startConversationCall,
   subscribeToBlockedUsers,
   subscribeToUserConversationSafetySettings,
+  subscribeToUserPresence,
  } from "@/lib/firestore";
  import { Card, CardContent } from "@/components/ui/card";
  import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ import { Badge } from "@/components/ui/badge";
  import ImageShare from "@/components/messages/ImageShare";
  import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
  import { getFirebaseStorage } from "@/lib/firebase";
+import NextImage from "next/image";
  import {
   MessageCircle,
   Send,
@@ -59,309 +61,30 @@ import { Badge } from "@/components/ui/badge";
   MoreHorizontal,
  } from "lucide-react";
  import { getInitials } from "@/lib/utils";
-
-const ONLINE_PRESENCE_TTL_MS = 75 * 1000;
-const TYPING_STATUS_TTL_MS = 4000;
-const MESSAGES_BOOTSTRAP_TIMEOUT_MS = 12000;
-const MESSAGES_LISTENER_RETRY_LIMIT = 5;
-const DIRECTORY_PAGE_SIZE = 36;
-const EMOJI_OPTIONS = [
-  "😊",
-  "😂",
-  "😍",
-  "🥰",
-  "😘",
-  "🙏",
-  "❤️",
-  "💕",
-  "🌸",
-  "✨",
-  "🎉",
-  "🤱",
-  "👶",
-  "🍼",
-  "😴",
-  "😅",
-  "🤗",
-  "💪",
-  "🙌",
-  "👍",
-  "🔥",
-  "🥹",
-  "🤍",
-  "🤎",
-  "💙",
-  "💜",
-  "😁",
-  "😉",
-  "😇",
-  "🤔",
-  "😌",
-  "👏",
-  "🎈",
-  "🌺",
-  "🌞",
-  "🌈",
-  "💐",
-  "🫶",
-  "🌟",
-];
-
-function normalizeSearchTerm(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function matchesSearchTerm(searchTerm, values = []) {
-  if (!searchTerm) {
-    return true;
-  }
-
-  return values
-    .filter((value) => typeof value === "string" && value.trim())
-    .map((value) => value.trim().toLowerCase())
-    .some((value) => value.includes(searchTerm));
-}
-
-function isRetryableMessageListenerError(error) {
-  const code = String(error?.code || "").trim().toLowerCase();
-  const message = String(error?.message || "").trim().toLowerCase();
-
-  return code === "permission-denied"
-    || code === "firestore/permission-denied"
-    || code === "unavailable"
-    || code === "firestore/unavailable"
-    || code === "failed-precondition"
-    || code === "firestore/failed-precondition"
-    || message.includes("insufficient permissions")
-    || message.includes("client is offline")
-    || message.includes("network");
-}
+import {
+  ONLINE_PRESENCE_TTL_MS,
+  TYPING_STATUS_TTL_MS,
+  MESSAGES_BOOTSTRAP_TIMEOUT_MS,
+  MESSAGES_LISTENER_RETRY_LIMIT,
+  DIRECTORY_PAGE_SIZE,
+  EMOJI_OPTIONS,
+  sendPushNotification,
+  normalizeSearchTerm,
+  matchesSearchTerm,
+  isRetryableMessageListenerError,
+  getTimestampMillis,
+  formatAudioDuration,
+} from "@/lib/messages-utils";
+import { messageStrings } from "@/lib/messages-strings";
 
 export default function MessagesPage() {
   const { user, loading: authLoading } = useAuth();
   const { t, language } = useLanguage();
   const router = useRouter();
-  const discoveryUi = language === "ht"
-    ? {
-        requestsTitle: "Demann mesaj",
-        discussionsTitle: "Diskisyon",
-        noRequests: "Pa gen demann pou kounye a",
-        incoming: "Resevwa",
-        outgoing: "Voye",
-        accept: "Aksepte",
-        decline: "Refize",
-        membersTitle: "Moun",
-        memberListEmpty: "Pa gen lòt moun pou kounye a",
-        online: "Anliy",
-        offline: "Pa anliy",
-        lastSeen: "Dènye prezans",
-        openConversation: "Louvri diskisyon an",
-        requestConversation: "Voye yon mesaj",
-        pending: "An atant",
-        requestCreated: "Diskisyon an pare.",
-        requestPending: "Gen deja yon demann mesaj an atant pou moun sa a.",
-        requestError: "Nou pa t ka louvri diskisyon an.",
-        requestAccepted: "Diskisyon an pare.",
-        requestDeclined: "Demann nan refize.",
-        onlineNow: "anliy kounye a",
-        typingNow: "Ap ekri kounye a...",
-        optionalMessageEmpty: "Pa gen mesaj ajoute pou kounye a.",
-        dialogSuccessTitle: "Aksyon reyisi",
-        dialogInfoTitle: "Mesaj",
-        dialogErrorTitle: "Gen yon pwoblèm",
-        sentStatus: "Voye",
-        deliveredStatus: "Livre",
-        seenStatus: "Li",
-        sendMessageError: "Nou pa t ka voye mesaj la.",
-        imageUploadError: "Nou pa t ka voye imaj yo.",
-        audioUploadError: "Nou pa t ka voye mesaj vokal la.",
-        audioPermissionError: "Nou pa ka jwenn mikwo a. Verifye pèmisyon yo.",
-        imageLimitError: "Ou ka voye jiska 5 imaj an menm tan.",
-        imageTypeError: "Se sèlman fichye imaj yo aksepte.",
-        imageSizeError: "Chak imaj dwe pi piti pase 5 MB.",
-        blocked: "Bloke",
-        unblock: "Debloke",
-        reportUser: "Siyale",
-        muteConversation: "Mete an sourdine",
-        unmuteConversation: "Retire sourdine",
-        hideConversation: "Kache",
-        restoreConversation: "Reparèt",
-        blockedBadge: "Bloke",
-        mutedBadge: "An sourdine",
-        hiddenBadge: "Kache",
-        interactionBlocked: "Entèraksyon sa a bloke ant de kont sa yo.",
-        messagingRestricted: "Kont sa a gen restriksyon sou mesaj kounye a.",
-        requestRateLimited: "Tanpri tann yon ti moman anvan ou voye yon lòt demann konvèsasyon.",
-        messageRateLimited: "Ou ap voye mesaj twò vit. Tann yon ti moman.",
-        duplicateMessage: "Menm mesaj la deja voye dènyèman.",
-        conversationMuted: "Konvèsasyon an mete an sourdine.",
-        conversationUnmuted: "Konvèsasyon an pa an sourdine ankò.",
-        conversationHidden: "Konvèsasyon an kache nan lis la.",
-        conversationRestored: "Konvèsasyon an reparèt nan lis la.",
-        userReported: "Siyalman an voye bay ekip modération an.",
-        userBlocked: "Itilizatè a bloke.",
-        userUnblocked: "Itilizatè a debloke.",
-        blockAction: "Bloke",
-        blockConfirm: "Èske ou vle bloke itilizatè sa a?",
-        unblockConfirm: "Èske ou vle debloke itilizatè sa a?",
-        reportPrompt: "Dekri pwoblèm nan oswa rezon siyalisyon an.",
-        blockDialogTitle: "Bloke itilizatè sa a",
-        unblockDialogTitle: "Debloke itilizatè sa a",
-        reportDialogTitle: "Voye yon signalman",
-        reportDialogMessage: "Bay kèk detay klè pou ekip modération an ka konprann sitiyasyon an byen vit.",
-        blockedConversationNotice: "Ou bloke itilizatè sa a. Debloke li pou rekòmanse pale.",
-        cannotSendBlocked: "Ou pa ka voye mesaj nan konvèsasyon sa a kounye a.",
-        emojiPicker: "Emoji",
-        emojiPickerTitle: "Ajoute yon emoji",
-        searchPeoplePlaceholder: "Chèche yon moun, yon vil oswa yon peyi...",
-        searchSidebarPlaceholder: "Chèche nan demann yo, diskisyon yo ak moun yo...",
-        loadMorePeople: "Chaje plis moun",
-        loadingPeople: "Ap chaje plis moun...",
-        memberSearchEmpty: "Pa gen moun ki koresponn ak rechèch sa a pou kounye a.",
-        searchNoResults: "Pa gen rezilta ki koresponn ak rechèch sa a pou kounye a.",
-        filterAll: "Tout",
-        manageConversation: "Jere diskisyon an",
-        callAction: "Rele",
-        callTitle: "Apèl odyo",
-        callBadge: "Agora",
-        callConnecting: "Ap konekte apèl la...",
-        callWaiting: "Ap tann moun nan reponn...",
-        callWaitingDescription: "Lòt moun nan kapab rantre nan apèl la dèske li aksepte li.",
-        callConnected: "Ou konekte sou apèl la.",
-        callParticipantConnected: "Lòt moun nan konekte sou apèl la.",
-        callConnectionError: "Nou pa t ka konekte apèl la kounye a.",
-        callConfigMissingError: "Apèl odyo yo poko konfigire sou aplikasyon an. Ajoute kle Agora yo pou aktive yo.",
-        callSdkMissingError: "Modil apèl odyo a poko enstale sou pwojè a.",
-        callAuthRequiredError: "Ou dwe konekte ankò pou itilize apèl odyo a.",
-        callMute: "Fèmen mikwo",
-        callUnmute: "Relimen mikwo",
-        callEnd: "Fèmen",
-        callClose: "Fèmen fenèt la",
-        callUnknownParticipant: "Patisipan",
-        incomingCall: "Apèl k ap antre",
-        incomingCallTitle: "Apèl k ap antre",
-        incomingCallMessage: "vle pale avè w kounye a.",
-        callAccept: "Reponn",
-        callDecline: "Refize",
-        callEnded: "Apèl la fini.",
-        callDeclined: "Apèl la refize.",
-        callMissed: "Ou gen yon apèl manke.",
-        callNoAnswer: "Apèl la pa jwenn repons.",
-        loadError: "Nou pa t ka chaje mesaj yo kounye a.",
-        loadTimeout: "Chajman mesaj yo pran twòp tan. Verifye koneksyon an epi eseye ankò.",
-        conversationLoadError: "Nou pa t ka chaje konvèsasyon sa a kounye a.",
-      }
-    : {
-        requestsTitle: "Demandes de message",
-        discussionsTitle: "Discussions",
-        noRequests: "Aucune demande pour le moment",
-        incoming: "Reçue",
-        outgoing: "Envoyée",
-        accept: "Accepter",
-        decline: "Refuser",
-        membersTitle: "Personnes",
-        memberListEmpty: "Aucune autre personne pour le moment",
-        online: "En ligne",
-        offline: "Hors ligne",
-        lastSeen: "Dernière présence",
-        openConversation: "Ouvrir la discussion",
-        requestConversation: "Envoyer un message",
-        pending: "En attente",
-        requestCreated: "La discussion est prête.",
-        requestPending: "Une demande de message est déjà en attente pour cette personne.",
-        requestError: "Impossible d'ouvrir la discussion.",
-        requestAccepted: "La discussion est prête.",
-        requestDeclined: "La demande a été refusée.",
-        onlineNow: "en ligne maintenant",
-        typingNow: "Écrit en ce moment...",
-        optionalMessageEmpty: "Aucun message ajouté pour le moment.",
-        dialogSuccessTitle: "Action réussie",
-        dialogInfoTitle: "Messages",
-        dialogErrorTitle: "Un problème est survenu",
-        sentStatus: "Envoyé",
-        deliveredStatus: "Livré",
-        seenStatus: "Vu",
-        sendMessageError: "Impossible d'envoyer le message.",
-        imageUploadError: "Impossible d'envoyer les images.",
-        audioUploadError: "Impossible d'envoyer le message vocal.",
-        audioPermissionError: "Impossible d'accéder au microphone. Vérifiez les permissions.",
-        imageLimitError: "Vous pouvez envoyer jusqu'à 5 images à la fois.",
-        imageTypeError: "Seuls les fichiers image sont acceptés.",
-        imageSizeError: "Chaque image doit faire moins de 5 Mo.",
-        blocked: "Bloqué",
-        unblock: "Débloquer",
-        reportUser: "Signaler",
-        muteConversation: "Mettre en sourdine",
-        unmuteConversation: "Retirer la sourdine",
-        hideConversation: "Masquer",
-        restoreConversation: "Réafficher",
-        blockedBadge: "Bloqué",
-        mutedBadge: "En sourdine",
-        hiddenBadge: "Masquée",
-        interactionBlocked: "Cette interaction est bloquée entre les deux comptes.",
-        messagingRestricted: "Ce compte a actuellement une restriction de messagerie.",
-        requestRateLimited: "Veuillez patienter un instant avant d'envoyer une nouvelle demande de message.",
-        messageRateLimited: "Vous envoyez des messages trop rapidement. Patientez un instant.",
-        duplicateMessage: "Le même message a déjà été envoyé récemment.",
-        conversationMuted: "La conversation a été mise en sourdine.",
-        conversationUnmuted: "La conversation n'est plus en sourdine.",
-        conversationHidden: "La conversation a été masquée de votre liste.",
-        conversationRestored: "La conversation est revenue dans votre liste.",
-        userReported: "Le signalement a été transmis à l'équipe de modération.",
-        userBlocked: "L'utilisateur a été bloqué.",
-        userUnblocked: "L'utilisateur a été débloqué.",
-        blockAction: "Bloquer",
-        blockConfirm: "Voulez-vous bloquer cet utilisateur ?",
-        unblockConfirm: "Voulez-vous débloquer cet utilisateur ?",
-        reportPrompt: "Décrivez le problème ou la raison du signalement.",
-        blockDialogTitle: "Bloquer cet utilisateur",
-        unblockDialogTitle: "Débloquer cet utilisateur",
-        reportDialogTitle: "Envoyer un signalement",
-        reportDialogMessage: "Ajoutez quelques détails pour aider l'équipe de modération à comprendre rapidement la situation.",
-        blockedConversationNotice: "Vous avez bloqué cet utilisateur. Débloquez-le pour reprendre la conversation.",
-        cannotSendBlocked: "Vous ne pouvez pas envoyer de message dans cette conversation pour le moment.",
-        emojiPicker: "Emojis",
-        emojiPickerTitle: "Ajouter un emoji",
-        searchPeoplePlaceholder: "Rechercher une personne, une ville ou un pays...",
-        searchSidebarPlaceholder: "Rechercher dans les demandes, discussions et personnes...",
-        loadMorePeople: "Charger plus de personnes",
-        loadingPeople: "Chargement de plus de personnes...",
-        memberSearchEmpty: "Aucune personne ne correspond à cette recherche pour le moment.",
-        searchNoResults: "Aucun résultat ne correspond à cette recherche pour le moment.",
-        filterAll: "Tout",
-        manageConversation: "Gérer la discussion",
-        callAction: "Appeler",
-        callTitle: "Appel audio",
-        callBadge: "Agora",
-        callConnecting: "Connexion de l'appel...",
-        callWaiting: "En attente de réponse...",
-        callWaitingDescription: "La personne pourra rejoindre l'appel dès qu'elle l'acceptera.",
-        callConnected: "Vous êtes connecté à l'appel.",
-        callParticipantConnected: "La personne a rejoint l'appel.",
-        callConnectionError: "Impossible de connecter l'appel pour le moment.",
-        callConfigMissingError: "Les appels audio ne sont pas encore configurés dans l'application. Ajoutez les clés Agora pour les activer.",
-        callSdkMissingError: "Le module d'appel audio n'est pas encore installé sur le projet.",
-        callAuthRequiredError: "Reconnectez-vous pour utiliser l'appel audio.",
-        callMute: "Couper le micro",
-        callUnmute: "Réactiver le micro",
-        callEnd: "Terminer",
-        callClose: "Fermer",
-        callUnknownParticipant: "Participant",
-        incomingCall: "Appel entrant",
-        incomingCallTitle: "Appel entrant",
-        incomingCallMessage: "souhaite vous parler maintenant.",
-        callAccept: "Répondre",
-        callDecline: "Refuser",
-        callEnded: "L'appel est terminé.",
-        callDeclined: "L'appel a été refusé.",
-        callMissed: "Vous avez un appel manqué.",
-        callNoAnswer: "L'appel est resté sans réponse.",
-        loadError: "Les messages n'ont pas pu être chargés pour le moment.",
-        loadTimeout: "Le chargement des messages a dépassé le délai prévu. Vérifiez la connexion puis réessayez.",
-        conversationLoadError: "Cette conversation n'a pas pu être chargée pour le moment.",
-      };
+  const discoveryUi = messageStrings[language] || messageStrings.fr;
   const [conversations, setConversations] = useState([]);
   const [members, setMembers] = useState([]);
+  const [conversationPresenceMap, setConversationPresenceMap] = useState(new Map());
   const [conversationRequests, setConversationRequests] = useState([]);
   const [blockedUserIds, setBlockedUserIds] = useState([]);
   const [conversationSafetySettings, setConversationSafetySettings] = useState([]);
@@ -537,6 +260,7 @@ export default function MessagesPage() {
     };
 
     let isActive = true;
+    let presenceRefreshInterval = null;
     let unsubscribeConversations = () => {};
     let unsubscribeRequests = () => {};
     let unsubscribeBlockedUsers = () => {};
@@ -632,7 +356,7 @@ export default function MessagesPage() {
         }
       );
 
-      getDiscoverableUsersPage({
+      const refreshMembers = () => getDiscoverableUsersPage({
         excludeUserId: user.uid,
         limitCount: DIRECTORY_PAGE_SIZE,
       })
@@ -651,6 +375,11 @@ export default function MessagesPage() {
             return;
           }
         });
+
+      refreshMembers();
+      presenceRefreshInterval = window.setInterval(() => {
+        if (isActive) refreshMembers();
+      }, 60000);
 
       unsubscribeRequests = subscribeToUserConversationRequests(
         user.uid,
@@ -705,6 +434,7 @@ export default function MessagesPage() {
       isActive = false;
       clearBootstrapTimeout();
       clearListenerRetryTimeout();
+      window.clearInterval(presenceRefreshInterval);
       unsubscribeConversations();
       unsubscribeRequests();
       unsubscribeBlockedUsers();
@@ -712,6 +442,26 @@ export default function MessagesPage() {
       unsubscribeConversationCalls();
     };
   }, [authLoading, discoveryUi.loadError, discoveryUi.loadTimeout, listenerBootstrapRevision, user]);
+
+  useEffect(() => {
+    if (!user?.uid || conversations.length === 0) return;
+    const partnerIds = [...new Set(
+      conversations
+        .map((c) => (c.participants || []).find((p) => p !== user.uid))
+        .filter(Boolean)
+    )];
+    const unsubs = partnerIds.map((uid) =>
+      subscribeToUserPresence(uid, (profile) => {
+        if (!profile) return;
+        setConversationPresenceMap((prev) => {
+          const next = new Map(prev);
+          next.set(uid, profile);
+          return next;
+        });
+      })
+    );
+    return () => unsubs.forEach((fn) => fn());
+  }, [conversations, user?.uid]);
 
   useEffect(() => {
     setConversationActionsOpen(false);
@@ -1047,6 +797,14 @@ export default function MessagesPage() {
         await sendMessage(selectedConversation.id, user.uid, trimmedMessage);
         setNewMessage("");
         setShowEmojiPicker(false);
+        if (selectedConversationOtherId) {
+          user.getIdToken().then((idToken) => sendPushNotification({
+            recipientUid: selectedConversationOtherId,
+            title: user.displayName || user.email || "Lakou Manman",
+            body: trimmedMessage.slice(0, 120),
+            url: "/messages",
+          }, idToken)).catch(() => {});
+        }
       }
       
       // Send audio if there's audio
@@ -1070,7 +828,14 @@ export default function MessagesPage() {
           audioURL: audioURL,
           duration: resolvedAudioDuration,
         });
-        
+        if (selectedConversationOtherId) {
+          user.getIdToken().then((idToken) => sendPushNotification({
+            recipientUid: selectedConversationOtherId,
+            title: user.displayName || user.email || "Lakou Manman",
+            body: "🎵 Message vocal",
+            url: "/messages",
+          }, idToken)).catch(() => {});
+        }
         setAudioBlob(null);
         setAudioDuration(0);
         // Trigger clear audio in VoiceRecorder
@@ -1388,10 +1153,6 @@ export default function MessagesPage() {
     });
   }
 
-  function getTimestampMillis(timestamp) {
-    return typeof timestamp?.toMillis === "function" ? timestamp.toMillis() : 0;
-  }
-
   function isPresenceCurrentlyOnline(profile) {
     const lastActiveAt = getTimestampMillis(profile?.lastActiveAt || profile?.lastSeenAt);
     return Boolean(profile?.isOnline) && lastActiveAt > 0 && presenceNow - lastActiveAt <= ONLINE_PRESENCE_TTL_MS;
@@ -1420,13 +1181,6 @@ export default function MessagesPage() {
     } finally {
       URL.revokeObjectURL(audioUrl);
     }
-  }
-
-  function formatAudioDuration(durationInSeconds) {
-    const totalSeconds = Math.max(0, Math.round(Number(durationInSeconds) || 0));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   }
 
   function getMissedCallLabel(call) {
@@ -1512,6 +1266,15 @@ export default function MessagesPage() {
       return;
     }
 
+    if (!String(process.env.NEXT_PUBLIC_AGORA_APP_ID || "").trim()) {
+      openRequestDialog({
+        tone: "info",
+        title: discoveryUi.dialogInfoTitle,
+        message: discoveryUi.callUnavailableMessage,
+      });
+      return;
+    }
+
     const existingCall = conversationCalls.find(
       (call) => call.conversationId === selectedConversation.id && ["ringing", "active"].includes(call.status)
     );
@@ -1530,6 +1293,12 @@ export default function MessagesPage() {
       });
       setCurrentCallSession(nextCall);
       setCallDialogOpen(true);
+      user.getIdToken().then((idToken) => sendPushNotification({
+        recipientUid: selectedConversationOtherId,
+        title: "📞 " + (user.displayName || user.email || "Lakou Manman"),
+        body: "Appel entrant — appuyez pour répondre",
+        url: "/messages",
+      }, idToken)).catch(() => {});
     } catch (error) {
       console.error("Error starting conversation call:", error);
       openRequestDialog({
@@ -1660,6 +1429,7 @@ export default function MessagesPage() {
 
     setNewMessage((current) => `${current || ""}${emoji}`);
     setComposerFeedback(null);
+    setShowEmojiPicker(false);
   }
 
   async function handleCreateRequest(targetUserId) {
@@ -1823,11 +1593,15 @@ export default function MessagesPage() {
     (request) => !blockedUserIds.includes(getOtherRequestParticipant(request))
   );
   const allMembersWithPresence = [...members]
-    .map((member) => ({
-      ...member,
-      isOnline: isPresenceCurrentlyOnline(member),
-      isBlocked: blockedUserIds.includes(member.id),
-    }))
+    .map((member) => {
+      const livePresence = conversationPresenceMap.get(member.id);
+      const merged = livePresence ? { ...member, ...livePresence } : member;
+      return {
+        ...merged,
+        isOnline: isPresenceCurrentlyOnline(merged),
+        isBlocked: blockedUserIds.includes(member.id),
+      };
+    })
     .sort((a, b) => {
       if (Boolean(b.isOnline) !== Boolean(a.isOnline)) {
         return Number(Boolean(b.isOnline)) - Number(Boolean(a.isOnline));
@@ -2337,8 +2111,8 @@ export default function MessagesPage() {
                   </AvatarFallback>
                 </Avatar>
 
-                <div className="flex-1">
-                  <h2 className="font-medium">
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate font-medium">
                     {selectedConversationDisplayName}
                   </h2>
                   {selectedConversationIsTyping ? (
@@ -2346,21 +2120,26 @@ export default function MessagesPage() {
                       {discoveryUi.typingNow}
                     </p>
                   ) : selectedConversationOtherMember && (
-                    <p className="text-xs text-slate-400">
+                    <p className="truncate text-xs text-slate-400">
                       {selectedConversationOtherMember.isOnline
                         ? discoveryUi.online
                         : `${discoveryUi.lastSeen} ${formatLastSeen(selectedConversationOtherMember.lastSeenAt)}`}
                     </p>
                   )}
                   {selectedConversation.itemInfo && (
-                    <p className="text-sm text-slate-500">
+                    <p className="truncate text-sm text-slate-500">
                       {selectedConversation.itemInfo.title}
+                    </p>
+                  )}
+                  {selectedConversationMissedCall && (
+                    <p className="mt-0.5 text-xs font-medium text-rose-600 sm:hidden">
+                      {getMissedCallLabel(selectedConversationMissedCall)}
                     </p>
                   )}
                 </div>
 
-                <div className="flex shrink-0 items-start gap-2 sm:items-center">
-                  <div className="flex flex-wrap justify-end gap-2">
+                <div className="flex shrink-0 items-center gap-2">
+                  <div className="hidden sm:flex flex-wrap justify-end gap-2">
                   {selectedConversationSafety.muted && (
                     <Badge variant="secondary" className="rounded-full">{discoveryUi.mutedBadge}</Badge>
                   )}
@@ -2504,12 +2283,15 @@ export default function MessagesPage() {
                             <div className="space-y-2">
                               <div className="grid grid-cols-2 gap-1">
                                 {message.images.map((img, index) => (
-                                  <img 
-                                    key={index}
-                                    src={img} 
-                                    alt={`Image ${index + 1}`}
-                                    className="rounded-lg max-w-full h-32 object-cover"
-                                  />
+                                  <div key={index} className="relative rounded-lg overflow-hidden h-32">
+                                    <NextImage
+                                      src={img}
+                                      alt={`Image ${index + 1}`}
+                                      fill
+                                      className="object-cover"
+                                      sizes="160px"
+                                    />
+                                  </div>
                                 ))}
                               </div>
                               {message.content && <p className="text-sm">{message.content}</p>}

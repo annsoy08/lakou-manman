@@ -2,6 +2,7 @@
 
 import { useLanguage } from "@/contexts/LanguageContext";
 import Link from "next/link";
+import Image from "next/image";
 import { 
   Facebook, 
   Instagram, 
@@ -61,9 +62,11 @@ export default function Footer() {
           {/* Logo and Description */}
           <div className="lg:col-span-2">
             <div className="flex items-center gap-3 mb-4">
-              <img 
-                src="/logo-lakou-manman.svg" 
-                alt="Lakou Manman" 
+              <Image
+                src="/logo-lakou-manman.svg"
+                alt="Lakou Manman"
+                width={64}
+                height={64}
                 className="h-16 w-auto"
               />
               <div>

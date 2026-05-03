@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 import { Menu, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -18,7 +19,7 @@ export default function MarketingHeader() {
     <header className="sticky top-0 z-50 overflow-x-clip border-b border-white/20 bg-[linear-gradient(180deg,_rgba(248,244,249,0.88)_0%,_rgba(244,238,247,0.82)_55%,_rgba(240,242,247,0.78)_100%)] shadow-[0_12px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur-2xl">
       <div className="app-shell-container flex flex-wrap items-center justify-between gap-3 py-3 sm:gap-4 sm:py-4">
         <Link href="/" className="flex min-w-0 items-center gap-3 transition-transform hover:scale-[1.01] sm:gap-4">
-          <img src="/logo-lakou-manman.png" alt="Lakou Manman" className="h-9 w-auto sm:h-12 lg:h-14" />
+          <Image src="/logo-lakou-manman.png" alt="Lakou Manman" width={56} height={56} className="h-9 w-auto sm:h-12 lg:h-14" priority />
           <div className="min-w-0">
             <div className="truncate text-[1.15rem] font-bold leading-none tracking-tight text-slate-900 sm:text-xl">
               <span className="gradient-text">Lakou</span> Manman

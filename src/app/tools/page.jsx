@@ -101,8 +101,8 @@ export default function ToolsPage() {
         {/* Quiz */}
         <Card className="rounded-[2rem] border-0 shadow-sm">
           <CardHeader>
-            <CardTitle className="text-lg">{language === 'ht' ? 'Quiz dòmi tibebe' : t("sleepQuiz")}</CardTitle>
-            <CardDescription>{language === 'ht' ? 'Yon zouti senp men trè angažan pou evalye woutin dòmi.' : t("sleepQuizDesc")}</CardDescription>
+            <CardTitle className="text-lg">{t("sleepQuiz")}</CardTitle>
+            <CardDescription>{t("sleepQuizDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             {quizQuestions.map((item, index) => (

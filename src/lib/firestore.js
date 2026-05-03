@@ -21,6 +21,7 @@ import {
   writeBatch,
   onSnapshot,
   runTransaction,
+  deleteField,
 } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb } from "./firebase";
 import { DOCTOR_SPECIALTY_STARTER_PROFILES, findStarterDoctorUserMatch } from "./doctor-specialty-content";
@@ -34,7 +35,7 @@ const defaultVaccinationProfile = {
 const ONLINE_PRESENCE_TTL_MS = 75 * 1000;
 const CONVERSATION_REQUEST_COOLDOWN_MS = 60 * 1000;
 const MESSAGE_MIN_INTERVAL_MS = 1500;
-const DUPLICATE_MESSAGE_WINDOW_MS = 30 * 1000;
+const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 1000;
 const USER_PRESENCE_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const userPresenceProfileExistenceCache = new Map();
 
@@ -53,7 +54,11 @@ function buildParticipantsKey(participants = []) {
 }
 
 function getTimestampValue(timestamp) {
-  return typeof timestamp?.toMillis === "function" ? timestamp.toMillis() : 0;
+  if (!timestamp) return 0;
+  if (typeof timestamp.toMillis === "function") return timestamp.toMillis();
+  if (typeof timestamp.seconds === "number") return timestamp.seconds * 1000;
+  if (typeof timestamp === "number") return timestamp;
+  return 0;
 }
 
 function sortByCreatedAtDesc(items = []) {
@@ -261,6 +266,8 @@ function buildDoctorArticlePayload(data = {}, editorUserId = "") {
     authorSpecialty: String(data.authorSpecialty || data.specialty || "").trim(),
     validated: data.validated !== false,
     published: data.published !== false,
+    pdfUrl: String(data.pdfUrl || "").trim(),
+    pdfName: String(data.pdfName || "").trim(),
   };
 }
 
@@ -404,19 +411,6 @@ async function assertMessageNotSpam(firestore, conversationId, senderId, content
     throw new Error("message_rate_limited");
   }
 
-  const normalizedContent = typeof content === "string" ? content.trim() : "";
-  const latestContent = typeof latestMessage.content === "string" ? latestMessage.content.trim() : "";
-  const nextType = String(data?.type || "text").trim().toLowerCase();
-  const latestType = String(latestMessage.type || "text").trim().toLowerCase();
-
-  if (
-    normalizedContent
-    && normalizedContent === latestContent
-    && nextType === latestType
-    && now - latestMessageTimestamp < DUPLICATE_MESSAGE_WINDOW_MS
-  ) {
-    throw new Error("duplicate_message");
-  }
 }
 
 function normalizeUserPresence(profile = {}) {
@@ -1438,7 +1432,9 @@ function normalizeShopItemRecord(item = {}) {
     location: String(item?.location || item?.city || "").trim(),
     sellerType,
     status,
-    images: Array.isArray(item?.images) ? item.images : [],
+    images: Array.isArray(item?.images)
+      ? item.images.map((img) => (typeof img === "string" ? { url: img, name: "", size: 0 } : img)).filter((img) => img?.url)
+      : [],
   };
 }
 
@@ -1605,7 +1601,11 @@ export async function getMarketingHomepageStats() {
     .filter((result) => result.status === "rejected")
     .map((result) => result.reason);
 
-  const fatalError = rejectedResults.find((error) => !isTransientFirestoreNetworkError(error));
+  const fatalError = rejectedResults.find((error) => {
+    const code = String(error?.code || "").trim().toLowerCase();
+    if (code === "permission-denied" || code === "firestore/permission-denied") return false;
+    return !isTransientFirestoreNetworkError(error);
+  });
   if (fatalError) {
     throw fatalError;
   }
@@ -1713,12 +1713,34 @@ export async function updateUserPresence(uid, data = {}) {
     throw new Error("Missing user id");
   }
 
+  const goingOffline = !Boolean(data?.isOnline);
   writePresenceProfileExistence(normalizedUid, true);
   await setDoc(doc(firestore, "users", normalizedUid), {
     isOnline: Boolean(data?.isOnline),
     lastActiveAt: serverTimestamp(),
+    ...(goingOffline ? { lastSeenAt: serverTimestamp() } : {}),
     updatedAt: serverTimestamp(),
   }, { merge: true });
+}
+
+export function subscribeToUserPresence(userId, onData, onError) {
+  const firestore = resolveDb();
+  const normalizedUserId = String(userId || "").trim();
+  if (!firestore || !normalizedUserId) {
+    onData?.(null);
+    return () => {};
+  }
+  return onSnapshot(
+    doc(firestore, "users", normalizedUserId),
+    (snap) => {
+      if (snap.exists()) {
+        onData?.(normalizeUserProfileRecord({ id: snap.id, ...snap.data() }));
+      } else {
+        onData?.(null);
+      }
+    },
+    (error) => onError?.(error)
+  );
 }
 
 export async function getAllUsers() {
@@ -2099,6 +2121,24 @@ export async function savePost(userId, postId) {
   return true;
 }
 
+export async function toggleCommentLike(postId, commentId, userId) {
+  const firestore = requireDb();
+  const likeRef = doc(firestore, "commentLikes", `${postId}_${commentId}_${userId}`);
+  const likeSnap = await getDoc(likeRef);
+  if (likeSnap.exists()) {
+    await deleteDoc(likeRef);
+    try {
+      await updateDoc(doc(firestore, "posts", postId, "comments", commentId), { likesCount: increment(-1) });
+    } catch (_) {}
+    return false;
+  }
+  await setDoc(likeRef, { postId, commentId, userId, createdAt: serverTimestamp() });
+  try {
+    await updateDoc(doc(firestore, "posts", postId, "comments", commentId), { likesCount: increment(1) });
+  } catch (_) {}
+  return true;
+}
+
 export async function addComment(postId, data = {}) {
   const firestore = requireDb();
   const ref = await addDoc(collection(firestore, "posts", postId, "comments"), {
@@ -2111,6 +2151,98 @@ export async function addComment(postId, data = {}) {
     updatedAt: serverTimestamp(),
   });
   return ref.id;
+}
+
+async function triggerPostShareEmailNotification(postId) {
+  const normalizedPostId = String(postId || "").trim();
+  if (!normalizedPostId || typeof fetch !== "function") return;
+  const idToken = await getCurrentFirebaseIdToken();
+  if (!idToken) return;
+  try {
+    await fetch("/api/post-share-email", {
+      method: "POST",
+      keepalive: true,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ postId: normalizedPostId }),
+    });
+  } catch (error) {
+    console.error("Error triggering post share email:", error);
+  }
+}
+
+export async function resharePost({ originalPost, sharerId, sharerName, sharerPhoto, comment = "", destGroupId = "" }) {
+  const firestore = requireDb();
+  const normalizedOriginalId = String(originalPost?.id || "").trim();
+  const normalizedSharerId = String(sharerId || "").trim();
+  if (!normalizedOriginalId || !normalizedSharerId) throw new Error("Missing reshare data");
+
+  const originalImages = Array.isArray(originalPost.images)
+    ? originalPost.images.filter(Boolean).map((img) => (typeof img === "string" ? img : String(img?.url || "")))
+    : [];
+
+  let ref;
+  try {
+    ref = await addDoc(collection(firestore, "posts"), {
+      authorId: normalizedSharerId,
+      authorName: String(sharerName || "").trim(),
+      authorPhoto: String(sharerPhoto || "").trim(),
+      body: String(comment || "").trim(),
+      groupId: String(destGroupId || "").trim(),
+      isReshare: true,
+      originalPostId: normalizedOriginalId,
+      originalAuthorId: String(originalPost.authorId || "").trim(),
+      originalAuthorName: String(originalPost.authorName || "").trim(),
+      originalAuthorPhoto: String(originalPost.authorPhoto || "").trim(),
+      originalPostTitle: String(originalPost.title || "").trim(),
+      originalPostBody: String(originalPost.body || "").trim(),
+      originalPostImages: originalImages,
+      originalPostTag: String(originalPost.tag || "").trim(),
+      originalPostGroupId: String(originalPost.groupId || "").trim(),
+      originalPostGroupName: String(originalPost.groupName || "").trim(),
+      hidden: false,
+      reported: false,
+      likesCount: 0,
+      commentsCount: 0,
+      sharesCount: 0,
+      images: [],
+      videos: [],
+      isAnonymous: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    console.error("resharePost: addDoc failed", { code: e?.code, sharerId: normalizedSharerId });
+    throw e;
+  }
+
+  try {
+    await updateDoc(doc(firestore, "posts", normalizedOriginalId), {
+      sharesCount: increment(1),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    console.warn("sharesCount increment skipped (deploy firestore rules to enable):", e?.code);
+  }
+
+  triggerPostShareEmailNotification(normalizedOriginalId);
+  return ref.id;
+}
+
+export async function sharePost(postId, sharerId) {
+  const firestore = requireDb();
+  const normalizedPostId = String(postId || "").trim();
+  const normalizedSharerId = String(sharerId || "").trim();
+  if (!normalizedPostId || !normalizedSharerId) return;
+  await addDoc(collection(firestore, "postShares"), {
+    postId: normalizedPostId,
+    sharerId: normalizedSharerId,
+    createdAt: serverTimestamp(),
+  });
+  await updateDoc(doc(firestore, "posts", normalizedPostId), {
+    sharesCount: increment(1),
+    updatedAt: serverTimestamp(),
+  });
+  triggerPostShareEmailNotification(normalizedPostId);
 }
 
 export async function getComments(postId) {
@@ -2942,7 +3074,7 @@ export async function createChessInviteNotification(data = {}) {
     type: "chess",
     title: "",
     message: "",
-    link: "/games#chess-game",
+    link: `/games?gameId=${gameId}#chess-game`,
     read: false,
     data: {
       gameId,
@@ -3173,11 +3305,16 @@ export async function startConversationCall(data = {}) {
   }
 
   const channelName = String(data?.channelName || `call_${conversationId}_${Date.now()}`).trim();
+  const participantNames = (conversation?.participantNames && typeof conversation.participantNames === "object")
+    ? conversation.participantNames
+    : {};
+  const callerName = String(participantNames[callerId] || data?.callerName || "").trim();
   const payload = {
     conversationId,
     participants: [callerId, calleeId],
     callerId,
     calleeId,
+    callerName,
     channelName,
     callType: "audio",
     status: "ringing",
@@ -3302,7 +3439,13 @@ export function subscribeToUserConversationCalls(userId, onData, onError) {
         .sort((a, b) => getTimestampValue(b.updatedAt) - getTimestampValue(a.updatedAt));
       onData?.(calls);
     },
-    onError
+    (error) => {
+      if (String(error?.code || "").includes("permission-denied")) {
+        onData?.([]);
+        return;
+      }
+      onError?.(error);
+    }
   );
 }
 
@@ -3313,14 +3456,21 @@ export async function getUserConversationCalls(userId) {
     return [];
   }
 
-  const snap = await getDocs(
-    query(collection(firestore, "conversationCalls"), where("participants", "array-contains", normalizedUserId))
-  );
+  try {
+    const snap = await getDocs(
+      query(collection(firestore, "conversationCalls"), where("participants", "array-contains", normalizedUserId))
+    );
 
-  return snap.docs
-    .map((callDoc) => normalizeConversationCallRecord({ id: callDoc.id, ...callDoc.data() }))
-    .filter((call) => ["ringing", "active", "missed"].includes(call.status))
-    .sort((a, b) => getTimestampValue(b.updatedAt) - getTimestampValue(a.updatedAt));
+    return snap.docs
+      .map((callDoc) => normalizeConversationCallRecord({ id: callDoc.id, ...callDoc.data() }))
+      .filter((call) => ["ringing", "active", "missed"].includes(call.status))
+      .sort((a, b) => getTimestampValue(b.updatedAt) - getTimestampValue(a.updatedAt));
+  } catch (error) {
+    if (String(error?.code || "").includes("permission-denied")) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export function subscribeToConversationCall(conversationId, onData, onError) {
@@ -3336,7 +3486,13 @@ export function subscribeToConversationCall(conversationId, onData, onError) {
     (callSnap) => {
       onData?.(callSnap.exists() ? normalizeConversationCallRecord({ id: callSnap.id, ...callSnap.data() }) : null);
     },
-    onError
+    (error) => {
+      if (String(error?.code || "").includes("permission-denied")) {
+        onData?.(null);
+        return;
+      }
+      onError?.(error);
+    }
   );
 }
 
@@ -3468,6 +3624,55 @@ export async function markItemSold(itemId) {
   await updateDoc(doc(firestore, "shopItems", normalizedItemId), {
     status: "sold",
     soldAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function saveFcmToken(uid, token) {
+  const firestore = requireDb();
+  if (!uid || !token) return;
+  await setDoc(
+    doc(firestore, "fcmTokens", uid),
+    { tokens: { [token]: true }, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+}
+
+export async function removeFcmToken(uid, token) {
+  const firestore = requireDb();
+  if (!uid || !token) return;
+  await updateDoc(doc(firestore, "fcmTokens", uid), {
+    [`tokens.${token}`]: deleteField(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateShopItem(itemId, data = {}) {
+  const firestore = requireDb();
+  const normalizedItemId = String(itemId || "").trim();
+  if (!normalizedItemId) {
+    throw new Error("Missing shop item id");
+  }
+  const allowed = [
+    "title", "description", "price", "category", "condition",
+    "location", "contact", "moncashPhone", "natcashPhone",
+    "shopName", "sellerType", "sellerCoordinates", "sellerLocationSource",
+  ];
+  const payload = { updatedAt: serverTimestamp() };
+  for (const key of allowed) {
+    if (key in data) payload[key] = data[key];
+  }
+  await updateDoc(doc(firestore, "shopItems", normalizedItemId), payload);
+}
+
+export async function updateShopItemImages(itemId, images = []) {
+  const firestore = requireDb();
+  const normalizedItemId = String(itemId || "").trim();
+  if (!normalizedItemId) {
+    throw new Error("Missing shop item id");
+  }
+  await updateDoc(doc(firestore, "shopItems", normalizedItemId), {
+    images,
     updatedAt: serverTimestamp(),
   });
 }
@@ -3644,10 +3849,20 @@ export async function getDoctorProfiles(options = {}) {
   return mapProfiles(profilesSnap.docs);
 }
 
-export async function getDoctorProfileByEditor(editorUserId) {
+export async function getDoctorProfileByEditor(editorUserId, fallbackDisplayName = "") {
   const profiles = await getDoctorProfiles();
   const normalizedEditorUserId = String(editorUserId || "").trim();
-  return profiles.find((profile) => String(profile?.editorUserId || "").trim() === normalizedEditorUserId) || null;
+
+  const byEditor = profiles.find((profile) => String(profile?.editorUserId || "").trim() === normalizedEditorUserId);
+  if (byEditor) return byEditor;
+
+  const normalizedDisplayName = String(fallbackDisplayName || "").trim().toLowerCase();
+  if (!normalizedDisplayName) return null;
+
+  return profiles.find((profile) =>
+    !String(profile?.editorUserId || "").trim() &&
+    String(profile?.displayName || "").trim().toLowerCase() === normalizedDisplayName
+  ) || null;
 }
 
 export async function ensureDoctorStarterProfiles(users = []) {
@@ -3894,6 +4109,96 @@ export async function submitDoctorQuestion(data = {}) {
   return ref.id;
 }
 
+export async function getDoctorQuestions({ queryLimit = 50 } = {}) {
+  const firestore = resolveDb();
+  if (!firestore) {
+    return [];
+  }
+
+  try {
+    const q = query(
+      collection(firestore, "doctor_questions"),
+      orderBy("createdAt", "desc"),
+      limit(queryLimit)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    return [];
+  }
+}
+
+export async function createDoctorAppointment(data = {}) {
+  const firestore = requireDb();
+  const ref = await addDoc(collection(firestore, "doctor_appointments"), {
+    doctorProfileId: String(data.doctorProfileId || "").trim(),
+    doctorId: String(data.doctorId || "").trim(),
+    doctorName: String(data.doctorName || "").trim(),
+    patientId: String(data.patientId || "").trim(),
+    patientName: String(data.patientName || "").trim(),
+    preferredDate: String(data.preferredDate || "").trim(),
+    preferredTime: String(data.preferredTime || "").trim(),
+    motif: String(data.motif || "").trim(),
+    status: "pending",
+    meetingUrl: "",
+    createdAt: serverTimestamp(),
+    confirmedAt: null,
+    rejectedAt: null,
+  });
+  return ref.id;
+}
+
+export async function getDoctorAppointments({ doctorId, queryLimit = 100 } = {}) {
+  const firestore = resolveDb();
+  if (!firestore) {
+    return [];
+  }
+
+  try {
+    const constraints = [orderBy("createdAt", "desc"), limit(queryLimit)];
+    if (doctorId) {
+      constraints.unshift(where("doctorId", "==", doctorId));
+    }
+    const q = query(collection(firestore, "doctor_appointments"), ...constraints);
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    return [];
+  }
+}
+
+export async function getPatientAppointments(patientId, { queryLimit = 50 } = {}) {
+  const firestore = resolveDb();
+  if (!firestore || !String(patientId || "").trim()) {
+    return [];
+  }
+
+  try {
+    const q = query(
+      collection(firestore, "doctor_appointments"),
+      where("patientId", "==", String(patientId).trim()),
+      orderBy("createdAt", "desc"),
+      limit(queryLimit)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    return [];
+  }
+}
+
+export async function updateDoctorAppointment(appointmentId, data = {}) {
+  const firestore = requireDb();
+  const normalizedId = String(appointmentId || "").trim();
+  if (!normalizedId) {
+    throw new Error("appointmentId is required");
+  }
+  await updateDoc(doc(firestore, "doctor_appointments", normalizedId), {
+    ...data,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function getUserVaccinationProfile(userId) {
   const firestore = resolveDb();
   const normalizedUserId = String(userId || "").trim();
@@ -3978,6 +4283,156 @@ export function subscribeToChessGameMessages(gameId, onData, onError) {
   );
 }
 
+export async function setChessPresence(uid) {
+  const firestore = requireDb();
+  const normalizedUid = String(uid || "").trim();
+  if (!normalizedUid) return;
+  await setDoc(doc(firestore, "chessPresence", normalizedUid), {
+    uid: normalizedUid,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function clearChessPresence(uid) {
+  const firestore = requireDb();
+  const normalizedUid = String(uid || "").trim();
+  if (!normalizedUid) return;
+  await deleteDoc(doc(firestore, "chessPresence", normalizedUid));
+}
+
+export function subscribeToChessPresence(onData, onError) {
+  const firestore = requireDb();
+  return onSnapshot(
+    collection(firestore, "chessPresence"),
+    (snapshot) => {
+      const now = Date.now();
+      const online = {};
+      snapshot.docs.forEach((d) => {
+        const updatedAt = d.data().updatedAt?.toMillis?.() || 0;
+        if (now - updatedAt < 3 * 60 * 1000) {
+          online[d.id] = true;
+        }
+      });
+      onData?.(online);
+    },
+    onError || (() => {})
+  );
+}
+
+// ─── Live Streams ────────────────────────────────────────────────────────────
+
+export async function createLiveStream(hostId, hostName, title) {
+  const firestore = requireDb();
+  const channelName = `live_${String(hostId || "").slice(0, 8)}_${Date.now()}`;
+  const docRef = await addDoc(collection(firestore, "liveStreams"), {
+    hostId: String(hostId || "").trim(),
+    hostName: String(hostName || "").trim(),
+    title: String(title || "").trim(),
+    status: "live",
+    channelName,
+    viewerCount: 0,
+    agoraRtmpTaskId: null,
+    youtubePushUrl: null,
+    createdAt: serverTimestamp(),
+    startedAt: serverTimestamp(),
+    endedAt: null,
+  });
+  return { id: docRef.id, channelName };
+}
+
+export async function updateLiveStream(streamId, updates) {
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "liveStreams", String(streamId || "").trim()), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function endLiveStream(streamId) {
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "liveStreams", String(streamId || "").trim()), {
+    status: "ended",
+    endedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export function subscribeToActiveLiveStreams(onData, onError) {
+  const firestore = requireDb();
+  return onSnapshot(
+    query(
+      collection(firestore, "liveStreams"),
+      where("status", "==", "live"),
+      orderBy("startedAt", "desc"),
+      limit(10)
+    ),
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    },
+    onError || (() => {})
+  );
+}
+
+export function subscribeToLiveStream(streamId, onData, onError) {
+  const firestore = requireDb();
+  return onSnapshot(
+    doc(firestore, "liveStreams", String(streamId || "").trim()),
+    (d) => { if (d.exists()) onData({ id: d.id, ...d.data() }); },
+    onError || (() => {})
+  );
+}
+
+export async function getEndedLiveStreams(limitCount = 20) {
+  const firestore = requireDb();
+  const snap = await getDocs(
+    query(
+      collection(firestore, "liveStreams"),
+      where("status", "==", "ended"),
+      orderBy("endedAt", "desc"),
+      limit(limitCount)
+    )
+  );
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export async function deleteLiveStream(streamId) {
+  const firestore = requireDb();
+  await deleteDoc(doc(firestore, "liveStreams", String(streamId || "").trim()));
+}
+
+export async function incrementLiveViewerCount(streamId, delta = 1) {
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "liveStreams", String(streamId || "").trim()), {
+    viewerCount: increment(delta),
+  });
+}
+
+export async function sendLiveMessage(streamId, { authorId, authorName, text, emoji }) {
+  const firestore = requireDb();
+  const msgCol = collection(firestore, "liveStreams", String(streamId).trim(), "messages");
+  await addDoc(msgCol, {
+    authorId: String(authorId || "").trim(),
+    authorName: String(authorName || "").trim(),
+    text: text ? String(text).trim() : null,
+    emoji: emoji ? String(emoji).trim() : null,
+    type: emoji && !text ? "reaction" : "message",
+    createdAt: serverTimestamp(),
+  });
+}
+
+export function subscribeLiveMessages(streamId, onData, onError) {
+  const firestore = requireDb();
+  return onSnapshot(
+    query(
+      collection(firestore, "liveStreams", String(streamId).trim(), "messages"),
+      orderBy("createdAt", "asc"),
+      limit(100)
+    ),
+    (snap) => onData(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    onError || (() => {})
+  );
+}
+
  export async function saveUserFcmToken(userId, token) {
    const firestore = requireDb();
    const normalizedUserId = String(userId || "").trim();
@@ -3992,3 +4447,310 @@ export function subscribeToChessGameMessages(gameId, onData, onError) {
      updatedAt: serverTimestamp(),
    }, { merge: true });
  }
+
+// ─── Réservations événementielles ─────────────────────────────────────────────
+
+export async function getEventPartners() {
+  const firestore = resolveDb();
+  if (!firestore) return [];
+  const snap = await getDocs(
+    query(collection(firestore, "eventPartners"), orderBy("createdAt", "desc"))
+  );
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export function subscribeToEventPartners(onData, onError) {
+  const firestore = resolveDb();
+  if (!firestore) { onData?.([]); return () => {}; }
+  return onSnapshot(
+    query(collection(firestore, "eventPartners"), orderBy("order", "asc")),
+    (snap) => onData(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    onError
+  );
+}
+
+export async function createEventPartner(data = {}) {
+  const firestore = requireDb();
+  const snap = await getDocs(collection(firestore, "eventPartners"));
+  const ref = await addDoc(collection(firestore, "eventPartners"), {
+    name: String(data.name || "").trim(),
+    subtitle: String(data.subtitle || "").trim(),
+    taglineFr: String(data.taglineFr || "").trim(),
+    taglineHt: String(data.taglineHt || "").trim(),
+    descFr: String(data.descFr || "").trim(),
+    descHt: String(data.descHt || "").trim(),
+    servicesFr: Array.isArray(data.servicesFr) ? data.servicesFr : [],
+    servicesHt: Array.isArray(data.servicesHt) ? data.servicesHt : [],
+    email: String(data.email || "").trim(),
+    phone: String(data.phone || "").trim(),
+    gradient: String(data.gradient || "from-rose-400 to-pink-500").trim(),
+    heroSrc: String(data.heroSrc || "").trim(),
+    active: data.active !== false,
+    order: snap.size,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function updateEventPartner(partnerId, data = {}) {
+  const firestore = requireDb();
+  const allowed = ["name","subtitle","taglineFr","taglineHt","descFr","descHt","servicesFr","servicesHt","email","phone","gradient","heroSrc","active","order"];
+  const payload = Object.fromEntries(Object.entries(data).filter(([k]) => allowed.includes(k)));
+  await updateDoc(doc(firestore, "eventPartners", partnerId), { ...payload, updatedAt: serverTimestamp() });
+}
+
+export async function deleteEventPartner(partnerId) {
+  const firestore = requireDb();
+  const { deleteDoc: del } = await import("firebase/firestore");
+  await del(doc(firestore, "eventPartners", partnerId));
+}
+
+export async function createEventBooking(data = {}) {
+  const firestore = requireDb();
+  const ref = await addDoc(collection(firestore, "eventBookings"), {
+    userId: String(data.userId || "").trim(),
+    userName: String(data.userName || "").trim(),
+    userEmail: String(data.userEmail || "").trim(),
+    userPhone: String(data.userPhone || "").trim(),
+    partnerId: String(data.partnerId || "").trim(),
+    partnerName: String(data.partnerName || "").trim(),
+    service: String(data.service || "").trim(),
+    eventDate: data.eventDate || null,
+    message: String(data.message || "").trim(),
+    status: "pending",
+    depositPaid: false,
+    depositAmount: 0,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function getUserEventBookings(userId) {
+  const firestore = resolveDb();
+  if (!firestore || !userId) return [];
+  const snap = await getDocs(
+    query(collection(firestore, "eventBookings"), where("userId", "==", userId))
+  );
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+}
+
+export async function getPartnerEventBookings(partnerId) {
+  const firestore = resolveDb();
+  if (!firestore || !partnerId) return [];
+  const snap = await getDocs(
+    query(collection(firestore, "eventBookings"), where("partnerId", "==", partnerId))
+  );
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+}
+
+export async function updateEventBookingStatus(bookingId, status, extra = {}) {
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "eventBookings", bookingId), {
+    status,
+    ...extra,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export function subscribeToUserEventBookings(userId, onData, onError) {
+  const firestore = resolveDb();
+  if (!firestore || !userId) { onData?.([]); return () => {}; }
+  return onSnapshot(
+    query(
+      collection(firestore, "eventBookings"),
+      where("userId", "==", userId)
+    ),
+    (snap) => {
+      const sorted = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => {
+          const ta = a.createdAt?.toMillis?.() ?? 0;
+          const tb = b.createdAt?.toMillis?.() ?? 0;
+          return tb - ta;
+        });
+      onData(sorted);
+    },
+    onError
+  );
+}
+
+export async function getAllEventBookings() {
+  const firestore = resolveDb();
+  if (!firestore) return [];
+  const snap = await getDocs(
+    query(collection(firestore, "eventBookings"), orderBy("createdAt", "desc"))
+  );
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export function subscribeToAllEventBookings(onData, onError) {
+  const firestore = resolveDb();
+  if (!firestore) { onData?.([]); return () => {}; }
+  return onSnapshot(
+    query(collection(firestore, "eventBookings"), orderBy("createdAt", "desc")),
+    (snap) => onData(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    onError
+  );
+}
+
+export async function respondToEventBooking(bookingId, { message, price, status }) {
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "eventBookings", bookingId), {
+    "adminResponse.message": String(message || "").trim(),
+    "adminResponse.price": String(price || "").trim(),
+    "adminResponse.respondedAt": serverTimestamp(),
+    status: status || "confirmed",
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function sendEventBookingMessage(bookingId, { text, senderId, senderName, senderRole, attachments = [] }) {
+  const firestore = requireDb();
+  await addDoc(collection(firestore, "eventBookings", bookingId, "messages"), {
+    text: String(text || "").trim(),
+    senderId: String(senderId || "").trim(),
+    senderName: String(senderName || "").trim(),
+    senderRole: String(senderRole || "user").trim(),
+    attachments: Array.isArray(attachments) ? attachments : [],
+    read: false,
+    createdAt: serverTimestamp(),
+  });
+  await updateDoc(doc(firestore, "eventBookings", bookingId), {
+    lastMessageAt: serverTimestamp(),
+    lastMessageRole: String(senderRole || "user").trim(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export function subscribeToEventBookingMessages(bookingId, onData, onError) {
+  const firestore = resolveDb();
+  if (!firestore || !bookingId) { onData?.([]); return () => {}; }
+  return onSnapshot(
+    query(
+      collection(firestore, "eventBookings", bookingId, "messages"),
+      orderBy("createdAt", "asc")
+    ),
+    (snap) => onData(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    onError
+  );
+}
+
+export async function markEventBookingMessagesRead(bookingId, readerRole) {
+  const firestore = resolveDb();
+  if (!firestore || !bookingId) return;
+  const snap = await getDocs(
+    query(
+      collection(firestore, "eventBookings", bookingId, "messages"),
+      where("read", "==", false)
+    )
+  );
+  const updates = snap.docs
+    .filter((d) => d.data().senderRole !== readerRole)
+    .map((d) => updateDoc(d.ref, { read: true }));
+  if (updates.length > 0) {
+    await Promise.all(updates);
+    await updateDoc(doc(firestore, "eventBookings", bookingId), {
+      lastMessageRole: null,
+      updatedAt: serverTimestamp(),
+    }).catch(() => {});
+  }
+}
+
+export async function markEventBookingDepositPaid(bookingId, paymentData = {}) {
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "eventBookings", bookingId), {
+    depositPaid: true,
+    depositPaidAt: serverTimestamp(),
+    depositAmount: paymentData.amount || 0,
+    depositTransactionId: paymentData.transactionId || "",
+    depositMethod: paymentData.paymentMethod || "moncash",
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function findUserByEmail(email) {
+  const firestore = resolveDb();
+  if (!firestore || !email) return null;
+  const snap = await getDocs(
+    query(collection(firestore, "users"), where("email", "==", String(email).trim().toLowerCase()))
+  );
+  if (snap.empty) return null;
+  return { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+export async function grantEventManagerRole(email, partnerName) {
+  const user = await findUserByEmail(email);
+  if (!user) throw new Error("Aucun compte trouvé avec cet email.");
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "users", user.id), {
+    role: "event_manager",
+    partnerName: String(partnerName || "").trim(),
+    updatedAt: serverTimestamp(),
+  });
+  return user;
+}
+
+export async function revokeEventManagerRole(uid) {
+  const firestore = requireDb();
+  await updateDoc(doc(firestore, "users", uid), {
+    role: "user",
+    partnerName: "",
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function getEventManagers() {
+  const firestore = resolveDb();
+  if (!firestore) return [];
+  const snap = await getDocs(
+    query(collection(firestore, "users"), where("role", "==", "event_manager"))
+  );
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export function subscribeToPartnerEventBookings(partnerName, onData, onError) {
+  const firestore = resolveDb();
+  if (!firestore || !partnerName) { onData?.([]); return () => {}; }
+  return onSnapshot(
+    query(collection(firestore, "eventBookings"), where("partnerName", "==", partnerName)),
+    (snap) => {
+      const sorted = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+      onData(sorted);
+    },
+    onError
+  );
+}
+
+// Contest functions live in src/lib/firestore-contests.js
+export {
+  subscribeToContests,
+  getContest,
+  createContest,
+  updateContestStatus,
+  addContestQuestion,
+  validateContestQuestion,
+  getContestQuestionsForDay,
+  getAllContestQuestions,
+  startContestQuizSession,
+  submitContestAnswer,
+  getContestParticipant,
+  addContestPublication,
+  subscribeToContestPublications,
+  voteContestPublication,
+  getUserVotesForContest,
+  recordContestReferral,
+  computeAndSavePhase3Score,
+  registerForContest,
+  subscribeToContestLeaderboard,
+  subscribeToContestParticipants,
+  ensureManmanEntelijan2026,
+  MANMAN_ENTELIJAN_ID,
+} from "./firestore-contests";

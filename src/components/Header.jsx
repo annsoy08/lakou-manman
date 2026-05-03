@@ -6,6 +6,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { useNotifications } from "@/contexts/NotificationContext";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { 
@@ -53,10 +54,13 @@ export default function Header() {
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-3">
-            <img 
-              src="/logo-lakou-manman.png" 
-              alt="Lakou Manman" 
+            <Image
+              src="/logo-lakou-manman.png"
+              alt="Lakou Manman"
+              width={56}
+              height={56}
               className="h-14 w-auto"
+              priority
             />
             <div className="hidden sm:block">
               <h1 className="text-xl font-bold text-slate-800">Lakou Manman</h1>

@@ -29,12 +29,20 @@ service cloud.firestore {
       return canonicalAdminEmail() || userRole() == 'admin';
     }
 
+    function isEventManager() {
+      return signedIn() && userRole() == 'event_manager';
+    }
+
     function isDoctorEditor() {
       return userRole() == 'doctor_editor';
     }
 
+    function isDoctor() {
+      return userRole() == 'doctor';
+    }
+
     function canManageDoctorContent() {
-      return isAdmin() || isDoctorEditor();
+      return isAdmin() || isDoctorEditor() || isDoctor();
     }
 
     function isOwner(ownerId) {
@@ -194,7 +202,7 @@ service cloud.firestore {
     }
 
     match /posts/{postId} {
-      allow read: if signedIn();
+      allow read: if true;
       allow create: if signedIn()
         && request.resource.data.authorId == uid()
         && canCreateRequestedPost();
@@ -203,7 +211,7 @@ service cloud.firestore {
         || (signedIn() && canManageGroupPostPin())
         || (
           signedIn()
-          && changedOnly(['likesCount', 'commentsCount', 'reported', 'updatedAt'])
+          && changedOnly(['likesCount', 'commentsCount', 'sharesCount', 'reported', 'updatedAt'])
           && request.resource.data.authorId == resource.data.authorId
           && request.resource.data.groupId == resource.data.groupId
         );
@@ -212,26 +220,42 @@ service cloud.firestore {
       match /comments/{commentId} {
         allow read: if signedIn();
         allow create: if signedIn() && request.resource.data.authorId == uid();
-        allow update, delete: if isAdmin() || (signedIn() && resource.data.authorId == uid());
+        allow update: if isAdmin()
+          || (signedIn() && resource.data.authorId == uid())
+          || (signedIn() && changedOnly(['likesCount']));
+        allow delete: if isAdmin() || (signedIn() && resource.data.authorId == uid());
       }
     }
 
+    match /postShares/{shareId} {
+      allow create: if signedIn() && request.resource.data.sharerId == uid();
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /commentLikes/{likeId} {
+      allow read: if signedIn() && (resource == null || resource.data.userId == uid());
+      allow create: if signedIn() && request.resource.data.userId == uid();
+      allow delete: if signedIn() && resource.data.userId == uid();
+      allow update: if false;
+    }
+
     match /postLikes/{likeId} {
-      allow read: if signedIn() && resource.data.userId == uid();
+      allow read: if signedIn() && (resource == null || resource.data.userId == uid());
       allow create: if signedIn() && request.resource.data.userId == uid();
       allow delete: if signedIn() && resource.data.userId == uid();
       allow update: if false;
     }
 
     match /savedPosts/{saveId} {
-      allow read: if signedIn() && resource.data.userId == uid();
+      allow read: if signedIn() && (resource == null || resource.data.userId == uid());
       allow create: if signedIn() && request.resource.data.userId == uid();
       allow delete: if signedIn() && resource.data.userId == uid();
       allow update: if false;
     }
 
     match /favorites/{favoriteId} {
-      allow read: if signedIn() && resource.data.userId == uid();
+      allow read: if signedIn() && (resource == null || resource.data.userId == uid());
       allow create: if signedIn() && request.resource.data.userId == uid();
       allow delete: if signedIn() && resource.data.userId == uid();
       allow update: if false;
@@ -258,7 +282,7 @@ service cloud.firestore {
     }
 
     match /groups/{groupId} {
-      allow read: if signedIn();
+      allow read: if true;
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || (signedIn() && (selfJoiningGroup() || selfLeavingGroup()));
     }
@@ -312,7 +336,7 @@ service cloud.firestore {
     }
 
     match /conversationCalls/{conversationId} {
-      allow read: if isConversationResourceParticipant();
+      allow read: if signedIn() && uid() in resource.data.participants;
       allow create: if isConversationParticipant(conversationId)
         && request.resource.data.conversationId == conversationId
         && request.resource.data.callerId == uid()
@@ -321,25 +345,37 @@ service cloud.firestore {
         && request.resource.data.participants.hasAll([request.resource.data.callerId, request.resource.data.calleeId])
         && isConversationRequestParticipant()
         && request.resource.data.status == 'ringing';
-      allow update: if isConversationResourceParticipant()
-        && request.resource.data.conversationId == resource.data.conversationId
-        && request.resource.data.callerId == resource.data.callerId
-        && request.resource.data.calleeId == resource.data.calleeId
-        && request.resource.data.participants == resource.data.participants
-        && request.resource.data.callType == resource.data.callType
-        && changedOnly([
-          'channelName',
-          'initiatedAt',
-          'status',
-          'answeredAt',
-          'answeredBy',
-          'declinedAt',
-          'declinedBy',
-          'missedAt',
-          'endedAt',
-          'endedBy',
-          'updatedAt'
-        ]);
+      allow update: if signedIn() && uid() in resource.data.participants
+        && (
+          (
+            isConversationResourceParticipant()
+            && request.resource.data.conversationId == resource.data.conversationId
+            && request.resource.data.callerId == resource.data.callerId
+            && request.resource.data.calleeId == resource.data.calleeId
+            && request.resource.data.participants == resource.data.participants
+            && request.resource.data.callType == resource.data.callType
+            && changedOnly([
+              'channelName',
+              'initiatedAt',
+              'status',
+              'answeredAt',
+              'answeredBy',
+              'declinedAt',
+              'declinedBy',
+              'missedAt',
+              'endedAt',
+              'endedBy',
+              'updatedAt'
+            ])
+          )
+          || (
+            resource.data.status in ['ended', 'declined', 'missed']
+            && request.resource.data.callerId == uid()
+            && request.resource.data.calleeId != uid()
+            && request.resource.data.status == 'ringing'
+            && request.resource.data.conversationId == conversationId
+          )
+        );
       allow delete: if false;
     }
 
@@ -396,6 +432,10 @@ service cloud.firestore {
       allow delete: if signedIn() && resource.data.userId == uid();
     }
 
+    match /fcmTokens/{tokenOwner} {
+      allow read, write: if signedIn() && tokenOwner == uid();
+    }
+
     match /shopItems/{itemId} {
       allow read: if signedIn();
       allow create: if signedIn()
@@ -405,9 +445,12 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (
           signedIn()
-          && (resource.data.authorId == uid() || resource.data.sellerId == uid())
-          && request.resource.data.authorId == resource.data.authorId
-          && request.resource.data.sellerId == resource.data.sellerId
+          && (
+            resource.data.authorId == uid()
+            || resource.data.sellerId == uid()
+            || (resource.data.authorId == '' && resource.data.sellerId == uid())
+            || (resource.data.sellerId == '' && resource.data.authorId == uid())
+          )
           && changedOnly([
             'title',
             'description',
@@ -476,30 +519,47 @@ service cloud.firestore {
     }
 
     match /doctor_profiles/{profileId} {
-      allow read: if resource.data.published != false || canManageDoctorContent();
+      allow read: if resource.data.published != false
+        || canManageDoctorContent()
+        || (signedIn() && resource.data.editorUserId == uid());
       allow create: if isAdmin()
         || (canManageDoctorContent() && request.resource.data.editorUserId == uid());
-      allow update, delete: if isAdmin()
+      allow update: if isAdmin()
+        || (canManageDoctorContent() && resource.data.editorUserId == uid())
+        || (signedIn() && resource.data.editorUserId == uid());
+      allow delete: if isAdmin()
         || (canManageDoctorContent() && resource.data.editorUserId == uid());
     }
 
     match /doctor_articles/{articleId} {
       allow read: if (resource.data.published != false && resource.data.validated != false) || canManageDoctorContent();
       allow create: if canManageDoctorContent() && request.resource.data.authorId == uid();
-      allow update, delete: if isAdmin()
+      allow update: if isAdmin()
+        || (canManageDoctorContent() && resource.data.authorId == uid());
+      allow delete: if isAdmin()
         || (canManageDoctorContent() && resource.data.authorId == uid());
     }
 
     match /doctor_videos/{videoId} {
       allow read: if (resource.data.published != false && resource.data.validated != false) || canManageDoctorContent();
       allow create: if canManageDoctorContent() && request.resource.data.authorId == uid();
-      allow update, delete: if isAdmin()
+      allow update: if isAdmin()
+        || (canManageDoctorContent() && resource.data.authorId == uid());
+      allow delete: if isAdmin()
         || (canManageDoctorContent() && resource.data.authorId == uid());
     }
 
     match /doctor_questions/{questionId} {
       allow create: if signedIn();
       allow read, update, delete: if canManageDoctorContent();
+    }
+
+    match /doctor_appointments/{appointmentId} {
+      allow create: if signedIn() && request.resource.data.patientId == uid();
+      allow read: if resource.data.patientId == uid() || canManageDoctorContent();
+      allow update: if isAdmin()
+        || (canManageDoctorContent() && resource.data.doctorId == uid());
+      allow delete: if isAdmin();
     }
 
     match /vaccinationProfiles/{profileId} {
@@ -514,6 +574,110 @@ service cloud.firestore {
     match /guides/{guideId} {
       allow read: if true;
       allow write: if isAdmin() || canManageDoctorContent();
+    }
+
+    match /chessPresence/{userId} {
+      allow read: if signedIn();
+      allow write: if signedIn() && userId == uid();
+      allow delete: if signedIn() && userId == uid();
+    }
+
+    match /liveStreams/{streamId} {
+      allow read: if signedIn();
+      allow create: if isAdmin() || canManageDoctorContent();
+      allow update: if isAdmin() || canManageDoctorContent()
+        || (signedIn() && resource.data.hostId == uid())
+        || (signedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewerCount']));
+      allow delete: if isAdmin() || canManageDoctorContent();
+
+      match /messages/{messageId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && request.resource.data.authorId == uid()
+          && request.resource.data.keys().hasAll(['authorId', 'authorName', 'type', 'createdAt']);
+        allow update, delete: if false;
+      }
+    }
+
+    match /eventPartners/{partnerId} {
+      allow read, list: if true;
+      allow create, update: if isAdmin() || isEventManager();
+      allow delete: if isAdmin();
+    }
+
+    match /contests/{contestId} {
+      allow read, list: if true;
+      allow create, update, delete: if isAdmin();
+
+      match /questions/{questionId} {
+        allow list: if signedIn();
+        allow read: if signedIn();
+        allow create, update, delete: if isAdmin();
+      }
+
+      match /answers/{questionId} {
+        allow read, list: if isAdmin();
+        allow create, update, delete: if isAdmin();
+      }
+
+      match /meta/{metaId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn();
+        allow delete: if isAdmin();
+      }
+
+      match /participants/{userId} {
+        allow read: if isAdmin() || (signedIn() && uid() == userId);
+        allow create, update: if signedIn() && uid() == userId;
+        allow delete: if isAdmin();
+        allow list: if signedIn();
+      }
+
+      match /publications/{pubId} {
+        allow read, list: if signedIn();
+        allow create: if signedIn() && request.resource.data.userId == uid();
+        allow update: if isAdmin();
+        allow delete: if isAdmin() || (signedIn() && resource.data.userId == uid());
+      }
+
+      match /votes/{voteId} {
+        allow read, list: if signedIn();
+        allow create: if signedIn() && request.resource.data.voterId == uid();
+        allow delete: if isAdmin();
+      }
+
+      match /referrals/{referrerId} {
+        allow read: if isAdmin() || (signedIn() && uid() == referrerId);
+        allow create, update: if signedIn();
+        allow list: if isAdmin();
+      }
+    }
+
+    match /eventBookings/{bookingId} {
+      allow create: if signedIn() && request.resource.data.userId == uid();
+      allow read: if isAdmin()
+        || isEventManager()
+        || (signedIn() && resource.data.userId == uid());
+      allow update: if isAdmin()
+        || isEventManager()
+        || (signedIn() && resource.data.userId == uid()
+          && changedOnly(['status', 'updatedAt'])
+          && request.resource.data.status == 'cancelled');
+      allow delete: if isAdmin();
+      allow list: if isAdmin() || isEventManager();
+
+      match /messages/{messageId} {
+        allow read, list: if isAdmin()
+          || isEventManager()
+          || (signedIn() && get(/databases/$(database)/documents/eventBookings/$(bookingId)).data.userId == uid());
+        allow create: if signedIn()
+          && request.resource.data.senderId == uid()
+          && (isAdmin() || isEventManager()
+            || get(/databases/$(database)/documents/eventBookings/$(bookingId)).data.userId == uid());
+        allow update: if isAdmin() || isEventManager()
+          || (signedIn() && get(/databases/$(database)/documents/eventBookings/$(bookingId)).data.userId == uid());
+        allow delete: if isAdmin();
+      }
     }
 
     match /{document=**} {

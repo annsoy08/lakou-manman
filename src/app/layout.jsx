@@ -7,6 +7,13 @@ const publicSiteUrl = getPublicSiteUrl();
 const siteTitle = "Lakou Manman - Kominote manman ayisyen";
 const siteDescription = "Yon platfom enteraktif pou manman ayisyen jwenn konsey, sipor, epi pataje eksperyans yo ak kominote, resous pratik, kontni valide, ak yon vizyon pou tounen yon vre rezo sosyal pou manman.";
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  themeColor: "#9b2335",
+};
+
 export const metadata = {
   metadataBase: new URL(publicSiteUrl),
   title: {

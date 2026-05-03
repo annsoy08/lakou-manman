@@ -85,7 +85,7 @@ export default function NotificationsPage() {
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold">{t("notifications")}</h1>
           <p className="mt-1 text-slate-600">
@@ -93,7 +93,7 @@ export default function NotificationsPage() {
           </p>
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {unreadCount > 0 && (
             <Button
               variant="outline"
@@ -101,8 +101,8 @@ export default function NotificationsPage() {
               onClick={markAllAsRead}
               className="rounded-xl"
             >
-              <Check className="mr-2 h-4 w-4" />
-              {t("markAllAsRead")}
+              <Check className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">{t("markAllAsRead")}</span>
             </Button>
           )}
           
@@ -113,8 +113,8 @@ export default function NotificationsPage() {
               onClick={clearAll}
               className="rounded-xl text-slate-500"
             >
-              <Trash2 className="mr-2 h-4 w-4" />
-              {t("clearAll")}
+              <Trash2 className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">{t("clearAll")}</span>
             </Button>
           )}
         </div>

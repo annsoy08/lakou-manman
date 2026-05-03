@@ -1,18 +1,5 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useAuth } from "@/contexts/AuthContext";
-import { useLanguage } from "@/contexts/LanguageContext";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import ActionDialog from "@/components/ui/action-dialog";
-import { CheckCircle, Home, ShoppingBag, Download } from "lucide-react";
-import Link from "next/link";
-
-// Force client-side rendering - prevent static generation
-export const dynamic = 'force-dynamic';
-export const runtime = 'edge';
+/* eslint-disable */
+// DEPRECATED – fichier de sauvegarde, peut être supprimé manuellement.
 export const revalidate = 0;
 
 export default function PaymentSuccessPage() {

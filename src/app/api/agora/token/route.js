@@ -1,21 +1,9 @@
 import { NextResponse } from "next/server";
 import { authenticateFirebaseUserFromRequest, unauthorizedJson } from "@/lib/server/firebase-auth";
 import { getDocumentAsAdmin } from "@/lib/server/firestore-admin";
+import * as agoraTokenSdkImport from "agora-token";
 
- let agoraTokenModulePromise = null;
-
- async function loadAgoraTokenSdk() {
-   if (!agoraTokenModulePromise) {
-     const importAgoraTokenModule = new Function("moduleName", "return import(moduleName);");
-     agoraTokenModulePromise = importAgoraTokenModule("agora-token").catch((error) => {
-       agoraTokenModulePromise = null;
-       throw error;
-     });
-   }
-
-   const sdkModule = await agoraTokenModulePromise;
-   return sdkModule?.default || sdkModule;
- }
+const agoraTokenSdk = agoraTokenSdkImport?.default || agoraTokenSdkImport;
 
 function normalizeEnvValue(value = "") {
   return String(value ?? "").trim().replace(/^['"]|['"]$/g, "");
@@ -80,7 +68,6 @@ export async function POST(request) {
       return noStoreJson({ error: "missing_call_channel" }, 409);
     }
 
-    const agoraTokenSdk = await loadAgoraTokenSdk().catch(() => null);
     const RtcTokenBuilder = agoraTokenSdk?.RtcTokenBuilder;
     const RtcRole = agoraTokenSdk?.RtcRole;
     if (!RtcTokenBuilder || !RtcRole) {

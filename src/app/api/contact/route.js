@@ -71,6 +71,13 @@ export async function POST(request) {
       );
     }
 
+    if (trimmedPayload.name.length > 120 || trimmedPayload.subject.length > 200 || trimmedPayload.message.length > 5000) {
+      return NextResponse.json(
+        { error: "validation_error", message: "One or more fields exceed the maximum allowed length." },
+        { status: 400 }
+      );
+    }
+
     if (!isValidEmail(trimmedPayload.email)) {
       return NextResponse.json(
         {

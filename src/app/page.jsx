@@ -1,6 +1,9 @@
-"use client";
+import dynamic from "next/dynamic";
 
-import MarketingHomepage from "@/components/marketing/MarketingHomepage";
+const MarketingHomepage = dynamic(
+  () => import("@/components/marketing/MarketingHomepage"),
+  { ssr: false }
+);
 
 export default function LandingPage() {
   return <MarketingHomepage />;

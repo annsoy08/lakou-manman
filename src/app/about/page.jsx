@@ -147,32 +147,42 @@ export default function AboutPage() {
           </div>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <Card className="text-center">
-            <CardContent className="p-6">
-              <div className="text-3xl font-bold text-pink-600 mb-2">10,000+</div>
-              <div className="text-slate-600">{t("activeMoms") || "Mamans actives"}</div>
-            </CardContent>
-          </Card>
-          <Card className="text-center">
-            <CardContent className="p-6">
-              <div className="text-3xl font-bold text-purple-600 mb-2">50+</div>
-              <div className="text-slate-600">{t("expertPartners") || "Partenaires experts"}</div>
-            </CardContent>
-          </Card>
-          <Card className="text-center">
-            <CardContent className="p-6">
-              <div className="text-3xl font-bold text-blue-600 mb-2">1000+</div>
-              <div className="text-slate-600">{t("dailyPosts") || "Publications quotidiennes"}</div>
-            </CardContent>
-          </Card>
-          <Card className="text-center">
-            <CardContent className="p-6">
-              <div className="text-3xl font-bold text-green-600 mb-2">98%</div>
-              <div className="text-slate-600">{t("satisfaction") || "Satisfaction"}</div>
-            </CardContent>
-          </Card>
+        {/* Stats — aspirational goals */}
+        <div>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="inline-block rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-700">
+                Nos objectifs
+              </span>
+              <p className="mt-1 text-sm text-slate-500">Ce que nous visons pour la communauté Lakou Manman.</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-4">
+            <Card className="text-center">
+              <CardContent className="p-6">
+                <div className="text-3xl font-bold text-pink-600 mb-2">10 000+</div>
+                <div className="text-slate-600">{t("activeMoms") || "Mamans actives"}</div>
+              </CardContent>
+            </Card>
+            <Card className="text-center">
+              <CardContent className="p-6">
+                <div className="text-3xl font-bold text-purple-600 mb-2">50+</div>
+                <div className="text-slate-600">{t("expertPartners") || "Partenaires experts"}</div>
+              </CardContent>
+            </Card>
+            <Card className="text-center">
+              <CardContent className="p-6">
+                <div className="text-3xl font-bold text-blue-600 mb-2">1 000+</div>
+                <div className="text-slate-600">{t("dailyPosts") || "Publications quotidiennes"}</div>
+              </CardContent>
+            </Card>
+            <Card className="text-center">
+              <CardContent className="p-6">
+                <div className="text-3xl font-bold text-green-600 mb-2">98%</div>
+                <div className="text-slate-600">{t("satisfaction") || "Satisfaction"}</div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
 
         {/* Team */}

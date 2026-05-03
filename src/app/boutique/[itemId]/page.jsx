@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -475,7 +476,7 @@ export default function BoutiqueItemDetailPage() {
                               : "border-[#f0d8dc] hover:border-[#e2a0ad]"
                           }`}
                         >
-                          <img src={imageUrl} alt={`${item.title || t("item")} ${index + 1}`} className="aspect-square w-full object-cover" />
+                          <Image src={imageUrl} alt={`${item.title || t("item")} ${index + 1}`} width={300} height={300} className="aspect-square w-full object-cover" />
                         </button>
                       ))}
                     </div>
@@ -688,7 +689,7 @@ export default function BoutiqueItemDetailPage() {
               <div className="mb-6 rounded-[1.4rem] border border-[#f1dce0] bg-white p-4 shadow-[0_10px_22px_-20px_rgba(214,60,84,0.08)]">
                 <div className="flex items-center gap-3">
                   {selectedImageUrl ? (
-                    <img src={selectedImageUrl} alt={item.title || item.name} className="h-16 w-16 rounded-xl object-cover" />
+                    <Image src={selectedImageUrl} alt={item.title || item.name} width={64} height={64} className="h-16 w-16 rounded-xl object-cover" />
                   ) : (
                     <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-100 text-slate-300">
                       <ImageIcon className="h-6 w-6" />

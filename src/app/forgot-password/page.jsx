@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,8 @@ export default function ForgotPasswordPage() {
         title: "Bliye modpas?",
         description: "Antre imèl ou epi n ap voye yon lyen pou w reyanitilize modpas ou.",
         userNotFound: "Pa gen kont ak imèl sa a.",
+        invalidEmail: "Fòma imèl sa a pa valid.",
+        tooManyRequests: "Twòp demann. Tann kèk minit epi eseye ankò.",
         network: "Gen yon pwoblèm koneksyon entènèt. Verifye rezo a epi eseye ankò.",
         generic: "Yon erè rive. Eseye ankò.",
         sentPrefix: "Nou voye yon imèl bay",
@@ -36,6 +39,8 @@ export default function ForgotPasswordPage() {
         title: "Mot de passe oublié ?",
         description: "Entrez votre e-mail et nous vous enverrons un lien pour réinitialiser votre mot de passe.",
         userNotFound: "Aucun compte n'est associé à cet e-mail.",
+        invalidEmail: "Format d'e-mail invalide.",
+        tooManyRequests: "Trop de tentatives. Attendez quelques minutes puis réessayez.",
         network: "Problème de connexion internet. Vérifiez votre réseau puis réessayez.",
         generic: "Une erreur s'est produite. Essayez à nouveau.",
         sentPrefix: "Nous avons envoyé un e-mail à",
@@ -56,6 +61,10 @@ export default function ForgotPasswordPage() {
     } catch (err) {
       if (err.code === "auth/user-not-found") {
         setError(content.userNotFound);
+      } else if (err.code === "auth/invalid-email") {
+        setError(content.invalidEmail);
+      } else if (err.code === "auth/too-many-requests") {
+        setError(content.tooManyRequests);
       } else if (err.code === "auth/network-request-failed") {
         setError(content.network);
       } else {
@@ -70,7 +79,7 @@ export default function ForgotPasswordPage() {
     <div className="flex min-h-[60vh] items-center justify-center">
       <Card className="w-full max-w-md rounded-[2rem] bg-white">
         <CardHeader className="text-center">
-          <img src="/logo-lakou-manman.png" alt="Lakou Manman" className="mx-auto mb-4 h-20 w-auto" />
+          <Image src="/logo-lakou-manman.png" alt="Lakou Manman" width={80} height={80} className="mx-auto mb-4 h-20 w-auto" priority />
           <CardTitle className="text-2xl">{content.title}</CardTitle>
           <CardDescription>{content.description}</CardDescription>
         </CardHeader>

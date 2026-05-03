@@ -551,6 +551,47 @@ async function patchDocument(documentPath, data = {}) {
   });
 }
 
+export async function runStructuredQueryAsAdmin(collectionId, { fieldFilters = [], limit = 500 } = {}) {
+  const where = fieldFilters.length === 1
+    ? {
+        fieldFilter: {
+          field: { fieldPath: fieldFilters[0].field },
+          op: fieldFilters[0].op || "EQUAL",
+          value: toFirestoreValue(fieldFilters[0].value),
+        },
+      }
+    : fieldFilters.length > 1
+    ? {
+        compositeFilter: {
+          op: "AND",
+          filters: fieldFilters.map((f) => ({
+            fieldFilter: {
+              field: { fieldPath: f.field },
+              op: f.op || "EQUAL",
+              value: toFirestoreValue(f.value),
+            },
+          })),
+        },
+      }
+    : undefined;
+
+  const queryPayload = {
+    structuredQuery: {
+      from: [{ collectionId }],
+      ...(where ? { where } : {}),
+      limit,
+    },
+  };
+
+  const response = await firestoreRequest("/documents:runQuery", {
+    method: "POST",
+    body: queryPayload,
+  });
+
+  if (!Array.isArray(response)) return [];
+  return response.filter((e) => e?.document).map((e) => fromFirestoreDocument(e.document));
+}
+
 export async function getDocumentAsAdmin(documentPath) {
   const normalizedDocumentPath = String(documentPath || "").trim();
   if (!normalizedDocumentPath) {

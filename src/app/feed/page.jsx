@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { getPostsPage, getDiscoverableUsers, getGroups, searchShopItems } from "@/lib/firestore";
+import { getPostsPage, getDiscoverableUsers, getGroups, searchShopItems, createPost } from "@/lib/firestore";
+import Image from "next/image";
 import PostCard from "@/components/posts/PostCard";
 import PostForm from "@/components/posts/PostForm";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -22,6 +23,12 @@ import {
   UserRound,
   Sparkles,
   MapPin,
+  Trophy,
+  ChevronRight,
+  Gift,
+  Share2,
+  Link,
+  CheckCheck,
 } from "lucide-react";
 
 const getTrendingTopics = (language) => [
@@ -31,6 +38,228 @@ const getTrendingTopics = (language) => [
   language === 'fr' ? 'Mères dans la diaspora' : 'Manman nan diaspora',
   language === 'fr' ? 'Travail et enfants' : 'Travay ak timoun',
 ];
+
+const CONTEST_EMOJIS = ["🌸","🏆","✨","💪","🎉","🎀","👑","❤️","🙌","👏","🌟","🦋","💃","🌺","💕","🥇","🎊","🌈","💖","🔥"];
+
+function ContestBanner({ language, router, user, userProfile, onPostCreated }) {
+  const isFr = language !== "ht";
+  const [copied, setCopied] = useState(false);
+  const [feedOpen, setFeedOpen] = useState(false);
+  const [feedComment, setFeedComment] = useState("");
+  const [feedPosting, setFeedPosting] = useState(false);
+  const [feedPosted, setFeedPosted] = useState(false);
+  const [showEmojis, setShowEmojis] = useState(false);
+  const textareaRef = useRef(null);
+
+  function insertEmoji(emoji) {
+    const el = textareaRef.current;
+    if (!el) { setFeedComment((c) => c + emoji); return; }
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const next = feedComment.slice(0, start) + emoji + feedComment.slice(end);
+    setFeedComment(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
+  }
+
+  function handleCopy() {
+    const url = typeof window !== "undefined"
+      ? `${window.location.origin}/concours/manman-entelijan-2026`
+      : "https://lakou-manman.com/concours/manman-entelijan-2026";
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }).catch(() => {});
+  }
+
+  function handleWhatsApp() {
+    const url = typeof window !== "undefined"
+      ? `${window.location.origin}/concours/manman-entelijan-2026`
+      : "https://lakou-manman.com/concours/manman-entelijan-2026";
+    const text = isFr
+      ? `🌸 Concours Manman Entelijan 2026 — Lakou Manman\nDu 20 au 26 Mai 2026. Participe ici : ${url}`
+      : `🌸 Konkou Manman Entelijan 2026 — Lakou Manman\n20 pou 26 Me 2026. Patisipe la : ${url}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+  }
+
+  async function handleShareOnFeed() {
+    if (!user || feedPosting) return;
+    setFeedPosting(true);
+    try {
+      const url = typeof window !== "undefined"
+        ? `${window.location.origin}/concours/manman-entelijan-2026`
+        : "https://lakou-manman.com/concours/manman-entelijan-2026";
+      const imageUrl = "https://www.lakoumanman.com/image%20concours.png";
+      const body = feedComment.trim()
+        ? `${feedComment.trim()}\n\n🔗 ${url}`
+        : (isFr
+            ? `🌸 Concours Manman Entelijan 2026 — Lakou Manman\nDu 20 au 26 Mai 2026. Rejoins-moi !\n\n🔗 ${url}`
+            : `🌸 Konkou Manman Entelijan 2026 — Lakou Manman\n20 pou 26 Me 2026. Rantre avèm !\n\n🔗 ${url}`);
+      await createPost({
+        title: isFr ? "Concours Manman Entelijan 2026" : "Konkou Manman Entelijan 2026",
+        body,
+        tag: "tagCommunity",
+        authorId: user.uid,
+        authorName: userProfile?.name || user.displayName || "Utilisateur",
+        authorPhoto: userProfile?.photoURL || user.photoURL || "",
+        images: [imageUrl],
+      });
+      setFeedPosted(true);
+      setFeedComment("");
+      onPostCreated?.();
+      setTimeout(() => { setFeedOpen(false); setFeedPosted(false); }, 2500);
+    } catch {
+      // silent
+    } finally {
+      setFeedPosting(false);
+    }
+  }
+
+  function handleNativeShare() {
+    const url = typeof window !== "undefined"
+      ? `${window.location.origin}/concours/manman-entelijan-2026`
+      : "https://lakou-manman.com/concours/manman-entelijan-2026";
+    navigator.share({
+      title: isFr ? "Concours Manman Entelijan 2026" : "Konkou Manman Entelijan 2026",
+      text: isFr ? "Participe au concours Manman Entelijan 2026 sur Lakou Manman !" : "Patisipe nan konkou Manman Entelijan 2026 sou Lakou Manman !",
+      url,
+    }).catch(() => {});
+  }
+
+  return (
+    <div className="overflow-hidden rounded-[2rem] shadow-xl">
+      <Image
+        src="/image concours.png"
+        alt="Manman Entelijan — Konkou Fèt Manman"
+        width={900}
+        height={506}
+        className="w-full object-cover"
+      />
+      {/* CTA strip */}
+      <div className="bg-gradient-to-r from-rose-600 to-fuchsia-600 px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-bold text-white/70">
+              {isFr ? "20 → 26 Mai 2026 • Résultats 31 Mai" : "20 → 26 Me 2026 • Rezilta 31 Me"}
+            </p>
+            <div className="mt-1 flex items-center gap-1.5">
+              <Gift className="h-3.5 w-3.5 text-amber-300" />
+              <span className="text-sm font-extrabold text-amber-200">
+                {isFr ? "De beaux cadeaux à gagner !" : "Gen bèl kado pou genyen !"}
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={() => router.push("/concours")}
+            className="flex shrink-0 items-center gap-1.5 rounded-2xl bg-white px-5 py-2.5 text-sm font-extrabold text-rose-600 shadow-xl transition hover:bg-rose-50">
+            {isFr ? "Participer maintenant" : "Patisipe kounye a"}
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Share row */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/20 pt-3">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-white/50 mr-1">
+            {isFr ? "Partager" : "Pataje"}
+          </span>
+          <button
+            onClick={handleWhatsApp}
+            className="flex items-center gap-1.5 rounded-xl bg-green-500 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-green-600">
+            <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.126.555 4.126 1.533 5.864L.061 23.504l5.817-1.447C7.59 23.002 9.739 23.5 12 23.5c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.5c-1.994 0-3.854-.547-5.443-1.498l-.39-.232-4.04 1.005.999-3.91-.254-.402A9.445 9.445 0 012.5 12C2.5 6.71 6.71 2.5 12 2.5S21.5 6.71 21.5 12 17.29 21.5 12 21.5z"/>
+            </svg>
+            WhatsApp
+          </button>
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1.5 rounded-xl bg-white/20 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-white/30">
+            {copied ? <CheckCheck className="h-3.5 w-3.5 text-green-300" /> : <Link className="h-3.5 w-3.5" />}
+            {copied ? (isFr ? "Copié !" : "Kopye !") : (isFr ? "Copier le lien" : "Kopye lyen")}
+          </button>
+          {typeof navigator !== "undefined" && navigator.share && (
+            <button
+              onClick={handleNativeShare}
+              className="flex items-center gap-1.5 rounded-xl bg-white/20 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-white/30">
+              <Share2 className="h-3.5 w-3.5" />
+              {isFr ? "Autres" : "Lòt"}
+            </button>
+          )}
+          {user && (
+            <button
+              onClick={() => setFeedOpen((v) => !v)}
+              className="flex items-center gap-1.5 rounded-xl bg-fuchsia-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-fuchsia-700">
+              <MessageCircle className="h-3.5 w-3.5" />
+              {isFr ? "Partager à tous" : "Pataje ak tout moun"}
+            </button>
+          )}
+        </div>
+
+        {/* Feed share panel */}
+        {feedOpen && (
+          <div className="mt-3 rounded-2xl border border-white/20 bg-white/10 p-3">
+            {feedPosted ? (
+              <div className="flex items-center justify-center gap-2 py-2 text-sm font-bold text-white">
+                <CheckCheck className="h-4 w-4 text-green-300" />
+                {isFr ? "Publié pour tous !" : "Pibliye pou tout moun !"}
+              </div>
+            ) : (
+              <>
+                <textarea
+                  ref={textareaRef}
+                  value={feedComment}
+                  onChange={(e) => setFeedComment(e.target.value)}
+                  placeholder={isFr ? "Ajouter un message (optionnel)…" : "Ajoute yon mesaj (opsyonèl)…"}
+                  rows={2}
+                  className="w-full resize-none rounded-xl border-0 bg-white/20 px-3 py-2 text-sm text-white placeholder-white/50 outline-none focus:bg-white/30"
+                />
+                {showEmojis && (
+                  <div className="mt-2 flex flex-wrap gap-1 rounded-xl bg-white/20 p-2">
+                    {CONTEST_EMOJIS.map((e) => (
+                      <button
+                        key={e}
+                        type="button"
+                        onClick={() => insertEmoji(e)}
+                        className="rounded-lg p-1 text-base leading-none hover:bg-white/20 transition">
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowEmojis((v) => !v)}
+                    className={`rounded-xl px-2.5 py-1.5 text-base leading-none transition ${showEmojis ? "bg-white/30" : "hover:bg-white/20"}`}
+                    title={isFr ? "Emojis" : "Emojis"}>
+                    😊
+                  </button>
+                  <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setFeedOpen(false); setFeedComment(""); setShowEmojis(false); }}
+                    className="rounded-xl px-3 py-1.5 text-xs text-white/60 hover:text-white">
+                    {isFr ? "Annuler" : "Anile"}
+                  </button>
+                  <button
+                    onClick={handleShareOnFeed}
+                    disabled={feedPosting}
+                    className="flex items-center gap-1.5 rounded-xl bg-white px-4 py-1.5 text-xs font-extrabold text-rose-600 transition hover:bg-rose-50 disabled:opacity-50">
+                    {feedPosting
+                      ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-rose-300 border-t-rose-600" />
+                      : <Share2 className="h-3.5 w-3.5" />}
+                    {isFr ? "Publier" : "Pibliye"}
+                  </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const cities = [
   "Tout kote",
@@ -197,7 +426,7 @@ function SpotlightMemberCard({ discoveryUi, member, onClick, t, compact = false 
   );
 }
 
-const FEED_BOOTSTRAP_TIMEOUT_MS = 12000;
+const FEED_BOOTSTRAP_TIMEOUT_MS = 20000;
 const FEED_MEMBERS_PAGE_SIZE = 24;
 const FEED_MEMBER_SPOTLIGHT_STEP = 8;
 const FEED_SHOP_PAGE_SIZE = 12;
@@ -233,6 +462,9 @@ export default function FeedPage() {
   const { user, userProfile } = useAuth();
   const { t, language } = useLanguage();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const targetPostId = searchParams.get("postId");
+  const [highlightedPostId, setHighlightedPostId] = useState(null);
   const [posts, setPosts] = useState([]);
   const [members, setMembers] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -349,9 +581,9 @@ export default function FeedPage() {
   const trendingTopics = getTrendingTopics(language);
   const [search, setSearch] = useState("");
   const [cityFilter, setCityFilter] = useState("all");
-  const [memberQueryLimit, setMemberQueryLimit] = useState(48);
+  const [memberQueryLimit, setMemberQueryLimit] = useState(16);
   const [memberSpotlightLimit, setMemberSpotlightLimit] = useState(8);
-  const [shopQueryLimit, setShopQueryLimit] = useState(12);
+  const [shopQueryLimit, setShopQueryLimit] = useState(6);
   const [shopPreviewLimit, setShopPreviewLimit] = useState(3);
   const [postsCursor, setPostsCursor] = useState(null);
   const [hasMorePosts, setHasMorePosts] = useState(false);
@@ -371,8 +603,8 @@ export default function FeedPage() {
     setLoading(true);
     setLoadError("");
     try {
-      const [postsPage, usersData, groupsData, shopData] = await withFeedTimeout(
-        Promise.all([
+      const [postsResult, usersResult, groupsResult, shopResult] = await withFeedTimeout(
+        Promise.allSettled([
           getPostsPage({ limitCount: FEED_POSTS_PAGE_SIZE }),
           getDiscoverableUsers({ excludeUserId: user?.uid, limitCount: memberQueryLimit }),
           getGroups(),
@@ -381,6 +613,10 @@ export default function FeedPage() {
         FEED_BOOTSTRAP_TIMEOUT_MS,
         "feed_bootstrap_timeout"
       );
+      const postsPage  = postsResult.status  === "fulfilled" ? postsResult.value  : { posts: [], hasMore: false, nextCursor: null };
+      const usersData  = usersResult.status  === "fulfilled" ? usersResult.value  : [];
+      const groupsData = groupsResult.status === "fulfilled" ? groupsResult.value : [];
+      const shopData   = shopResult.status   === "fulfilled" ? shopResult.value   : [];
       const defaultGroups = getDefaultFeedGroups(t).map(normalizeGroupRecord);
       const mergedGroupsMap = new Map(defaultGroups.map((group) => [group.id, group]));
       const builtInGroupIds = new Set(defaultGroups.map((group) => group.id));
@@ -423,6 +659,16 @@ export default function FeedPage() {
   useEffect(() => {
     loadPosts();
   }, [loadPosts]);
+
+  useEffect(() => {
+    if (loading || !targetPostId) return;
+    const timer = setTimeout(() => {
+      scrollToPost(targetPostId);
+      setHighlightedPostId(targetPostId);
+      setTimeout(() => setHighlightedPostId(null), 3000);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [loading, targetPostId]);
 
   const handleLoadMorePosts = useCallback(async () => {
     if (loading || loadingMorePosts || !hasMorePosts || !postsCursor) {
@@ -791,7 +1037,7 @@ export default function FeedPage() {
                           key={topic}
                           type="button"
                           onClick={() => setSearch(topic)}
-                          className="rounded-full border border-white/70 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-rose-200 hover:bg-white hover:text-rose-700"
+                          className="whitespace-nowrap rounded-full border border-white/70 bg-white/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-rose-200 hover:bg-white hover:text-rose-700"
                         >
                           #{topic}
                         </button>
@@ -883,6 +1129,9 @@ export default function FeedPage() {
 
           <PostForm onPostCreated={loadPosts} collapsible />
 
+          {/* ── Contest announcement banner ── */}
+          <ContestBanner language={language} router={router} user={user} userProfile={userProfile} onPostCreated={loadPosts} />
+
           <Card className="rounded-[2rem] border border-slate-200/70 bg-white/95 shadow-[0_20px_60px_-42px_rgba(15,23,42,0.3)]">
             <CardContent className="p-4 sm:p-5">
               {loadError ? (
@@ -900,8 +1149,12 @@ export default function FeedPage() {
               ) : (
                 <div className="space-y-5">
                   {filteredPosts.map((post) => (
-                    <div key={post.id} id={`feed-post-${post.id}`}>
-                      <PostCard post={post} />
+                    <div
+                      key={post.id}
+                      id={`feed-post-${post.id}`}
+                      className={highlightedPostId === post.id ? "rounded-[1.8rem] ring-2 ring-rose-400 ring-offset-2 transition-all duration-500" : ""}
+                    >
+                      <PostCard post={post} onUpdate={loadPosts} />
                     </div>
                   ))}
 
@@ -930,6 +1183,7 @@ export default function FeedPage() {
 
         {/* Right sidebar */}
         <div className="order-3 min-w-0 space-y-6">
+          {(stagePosts.length > 0 || diasporaGroups.length > 0) && (
           <Card className="rounded-[2rem] border border-white/70 bg-white/90 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.3)] backdrop-blur-[2px]">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-[1.02rem] font-semibold tracking-[-0.01em] text-slate-900">
@@ -937,12 +1191,11 @@ export default function FeedPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {stagePosts.length > 0 && (
               <div>
                 <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">{discoveryUi.stageContent}</div>
                 <div className="space-y-2">
-                  {stagePosts.length === 0 ? (
-                    <p className="text-sm text-slate-500">{discoveryUi.noRecommendations}</p>
-                  ) : stagePosts.map((post) => (
+                  {stagePosts.map((post) => (
                     <button
                       key={post.id}
                       onClick={() => scrollToPost(post.id)}
@@ -959,13 +1212,12 @@ export default function FeedPage() {
                   ))}
                 </div>
               </div>
-
+              )}
+              {diasporaGroups.length > 0 && (
               <div>
                 <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">{discoveryUi.diasporaGroups}</div>
                 <div className="space-y-2">
-                  {diasporaGroups.length === 0 ? (
-                    <p className="text-sm text-slate-500">{discoveryUi.noRecommendations}</p>
-                  ) : diasporaGroups.map((group) => (
+                  {diasporaGroups.map((group) => (
                     <button
                       key={group.id}
                       onClick={() => window.location.href = `/groups/${group.id}`}
@@ -982,8 +1234,10 @@ export default function FeedPage() {
                   ))}
                 </div>
               </div>
+              )}
             </CardContent>
           </Card>
+          )}
 
           <Card className="rounded-[2rem] border border-rose-100/70 bg-gradient-to-br from-rose-50 via-white to-pink-50 shadow-[0_22px_60px_-44px_rgba(190,24,93,0.28)]">
             <CardHeader className="pb-3">
@@ -1013,7 +1267,7 @@ export default function FeedPage() {
                 <button
                   type="button"
                   key={item.id}
-                  onClick={() => router.push("/boutique")}
+                  onClick={() => router.push(`/boutique/${item.id}`)}
                   className="flex w-full flex-col items-stretch gap-3 rounded-[1.45rem] border border-slate-100/90 bg-white/80 px-4 py-3.5 text-left shadow-[0_16px_38px_-34px_rgba(15,23,42,0.35)] transition hover:border-amber-100 hover:bg-amber-50/60 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="min-w-0 w-full">

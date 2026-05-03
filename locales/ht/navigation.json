@@ -14,5 +14,7 @@
   "register": "Enskri",
   "logout": "Dekonekte",
   "admin": "Admin",
-  "settings": "Paramèt"
+  "settings": "Paramèt",
+  "evenements": "Evènman",
+  "concours": "Konkou"
 }

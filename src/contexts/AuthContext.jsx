@@ -278,6 +278,13 @@ export function AuthProvider({ children }) {
     try {
       const auth = resolveAuth();
       const authUser = auth?.currentUser;
+
+      if (!authUser || authUser.uid !== uid) {
+        if (!isOnline) {
+          return;
+        }
+      }
+
       if (authUser && authUser.uid === uid) {
         await ensureFirebaseUserToken(authUser);
       }
@@ -372,7 +379,11 @@ export function AuthProvider({ children }) {
 
     if (needsBackfill) {
       try {
-        await updateUserProfile(firebaseUser.uid, ensuredProfile);
+        const { role: _role, moderationStatus: _ms, messagingRestricted: _mr, ...profileWithoutRestricted } = ensuredProfile;
+        const profileToWrite = isCanonicalAdminEmail(firebaseUser.email)
+          ? ensuredProfile
+          : profileWithoutRestricted;
+        await updateUserProfile(firebaseUser.uid, profileToWrite);
       } catch (error) {
         if (shouldLogClientError(error)) {
           console.error("Error ensuring user profile integrity:", error);
@@ -939,10 +950,10 @@ export function AuthProvider({ children }) {
     
     try {
       const uid = user && user.uid ? user.uid : "";
-      await signOut(auth);
       if (uid) {
-        syncPresence(uid, false);
+        await updateUserPresence(uid, { isOnline: false }).catch(() => {});
       }
+      await signOut(auth);
       setUser(null);
       setUserProfile(null);
     } catch (error) {
@@ -960,16 +971,29 @@ export function AuthProvider({ children }) {
     if (!auth) {
       throw new Error("Firebase auth not available");
     }
-    
+
+    const normalizedEmailValue = normalizeEmail(email);
+    if (!normalizedEmailValue) {
+      const err = new Error("Email is required");
+      err.code = "auth/invalid-email";
+      throw err;
+    }
+
+    const appOrigin = typeof window !== "undefined" ? window.location.origin : "https://lakoumanman.com";
+    const actionCodeSettings = {
+      url: `${appOrigin}/login`,
+      handleCodeInApp: false,
+    };
+
     try {
-      await sendPasswordResetEmail(auth, email);
+      await sendPasswordResetEmail(auth, normalizedEmailValue, actionCodeSettings);
     } catch (error) {
       if (shouldLogClientError(error)) {
         console.error("Error resetting password:", error);
       }
       trackError(error, {
         scope: "auth_reset_password",
-        email: normalizeEmail(email),
+        email: normalizedEmailValue,
       });
       throw error;
     }
@@ -1020,7 +1044,10 @@ export function AuthProvider({ children }) {
 
   const isAdmin = (userProfile && userProfile.role === "admin") || adminAccessOverride || isCanonicalAdminEmail((user && user.email) || "");
   const isDoctorEditor = userProfile && userProfile.role === "doctor_editor";
-  const canManageDoctorContent = isAdmin || isDoctorEditor;
+  const isDoctor = Boolean(userProfile && userProfile.role === "doctor");
+  const isEventManager = Boolean(userProfile && userProfile.role === "event_manager");
+  const canManageDoctorContent = isAdmin || isDoctorEditor || isDoctor;
+  const canManageEvents = isAdmin || isEventManager;
 
   const value = useMemo(() => ({
     user,
@@ -1028,7 +1055,10 @@ export function AuthProvider({ children }) {
     loading,
     isAdmin,
     isDoctorEditor,
+    isDoctor,
+    isEventManager,
     canManageDoctorContent,
+    canManageEvents,
     register,
     login,
     signInWithGoogle,
@@ -1043,7 +1073,10 @@ export function AuthProvider({ children }) {
     loading,
     isAdmin,
     isDoctorEditor,
+    isDoctor,
+    isEventManager,
     canManageDoctorContent,
+    canManageEvents,
     refreshProfile,
   ]);
 

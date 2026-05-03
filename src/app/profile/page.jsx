@@ -167,10 +167,10 @@ export default function ProfilePage() {
             {uploading && (
               <p className="mt-2 text-xs text-slate-500">{t("uploadingPhoto")}</p>
             )}
-            <h2 className="mt-4 text-xl font-semibold">{resolvedDisplayName}</h2>
-            <div className="mt-1 flex items-center gap-1 text-sm text-slate-500">
-              <MapPin className="h-3.5 w-3.5" />
-              {userProfile?.city || "Diaspora"}{userProfile?.country ? `, ${userProfile.country}` : ""}
+            <h2 className="mt-4 w-full break-words text-center text-xl font-semibold">{resolvedDisplayName}</h2>
+            <div className="mt-1 flex w-full items-center justify-center gap-1 break-words text-sm text-slate-500">
+              <MapPin className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 break-words">{userProfile?.city || "Diaspora"}{userProfile?.country ? `, ${userProfile.country}` : ""}</span>
             </div>
             {userProfile?.childAges && (
               <div className="mt-1 flex items-center gap-1 text-sm text-slate-500">

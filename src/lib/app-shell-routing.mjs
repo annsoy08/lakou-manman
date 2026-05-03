@@ -1,6 +1,6 @@
 const AUTH_ROUTES = new Set(["/login", "/register", "/forgot-password"]);
 const MARKETING_ROUTES = new Set(["/"]);
-const ONBOARDING_EXEMPT_ROUTES = new Set(["/doctor-dashboard", "/gynecologie-dashboard", "/psychologie-dashboard"]);
+const ONBOARDING_EXEMPT_ROUTES = new Set(["/doctor-dashboard", "/gynecologie-dashboard", "/psychologie-dashboard", "/pediatre-dashboard"]);
 const CANONICAL_ADMIN_EMAILS = new Set(["bannsoraya2@gmail.com"]);
 
 function normalizeRole(value = "") {
@@ -18,7 +18,7 @@ function hasOnboardingBypass(profile = null, user = null) {
       || (user && user.email ? user.email : "")
       || ""
   );
-  return role === "admin" || role === "doctor_editor" || CANONICAL_ADMIN_EMAILS.has(email);
+  return role === "admin" || role === "doctor_editor" || role === "doctor" || CANONICAL_ADMIN_EMAILS.has(email);
 }
 
 export function isAuthRoutePath(pathname = "") {
@@ -61,7 +61,18 @@ export function profileNeedsOnboarding(profile, user) {
     ? Boolean(String((profile && (profile.country || profile.city)) || "").trim())
     : Boolean(String((profile && profile.city) || "").trim());
 
-  return !(hasName && hasLocation && interests.length > 0);
+  if (hasName && (hasLocation || interests.length > 0)) {
+    return false;
+  }
+
+  const hasOtherProfileData = Boolean(
+    String((profile && (profile.bio || profile.childAges || profile.country)) || "").trim()
+  );
+  if (profile && hasName && hasOtherProfileData) {
+    return false;
+  }
+
+  return true;
 }
 
 export function getAppShellRedirectTarget({ pathname = "", user = null, userProfile = null, authLoading = false } = {}) {

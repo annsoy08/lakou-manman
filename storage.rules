@@ -29,6 +29,18 @@ service firebase.storage {
       allow write: if isOwner(userId);
     }
 
+    match /doctor_articles_pdfs/{userId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isOwner(userId) && request.resource.contentType == 'application/pdf' && request.resource.size <= 20 * 1024 * 1024;
+    }
+
+    match /eventBookings/{userId}/{allPaths=**} {
+      allow read: if signedIn() && (userId == request.auth.uid || request.auth.token.email.matches('(?i)^bannsoraya2@gmail\\.com$'));
+      allow write: if signedIn()
+        && userId == request.auth.uid
+        && request.resource.size <= 15 * 1024 * 1024;
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

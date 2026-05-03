@@ -8,6 +8,8 @@ import {
   createShopItem,
   deleteShopItem, 
   markItemSold,
+  updateShopItem,
+  updateShopItemImages,
   searchShopItems,
   getBuyerShopOrders,
   getSellerShopOrders,
@@ -43,6 +45,7 @@ import {
   Search,
   Store,
   ArrowRight,
+  Pencil,
 } from "lucide-react";
 import ImageUpload from "@/components/ui/ImageUpload";
 
@@ -271,6 +274,7 @@ export default function BoutiquePage() {
           rejected: "Preuve rejetée",
         },
       };
+  const [betaNoticeOpen, setBetaNoticeOpen] = useState(true);
   const [items, setItems] = useState([]);
   const [availableShopNames, setAvailableShopNames] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -317,6 +321,12 @@ export default function BoutiquePage() {
   const [sellerGeoStatus, setSellerGeoStatus] = useState("idle");
   const [sellerGeoError, setSellerGeoError] = useState("");
   const [pendingDeleteItemId, setPendingDeleteItemId] = useState("");
+  const [editPhotoItemId, setEditPhotoItemId] = useState("");
+  const [editPhotoImages, setEditPhotoImages] = useState([]);
+  const [editPhotoSaving, setEditPhotoSaving] = useState(false);
+  const [editItemId, setEditItemId] = useState("");
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
   const [dialogState, setDialogState] = useState({
     open: false,
     tone: "info",
@@ -588,6 +598,58 @@ export default function BoutiquePage() {
         title: boutiqueDialogText.deleteTitle,
         message: operationsText.requestErrorMessage,
       });
+    }
+  }
+
+  function openEditItem(item) {
+    if (editItemId === item.id) {
+      setEditItemId("");
+      setEditForm({});
+    } else {
+      setEditItemId(item.id);
+      setEditForm({
+        title: item.title || "",
+        price: item.price || "",
+        description: item.description || "",
+        category: item.category || "",
+        condition: item.condition || "good",
+        location: item.location || "",
+        contact: item.contact || "",
+        moncashPhone: item.moncashPhone || "",
+        natcashPhone: item.natcashPhone || "",
+        shopName: item.shopName || "",
+        sellerType: item.sellerType || "individual",
+      });
+    }
+  }
+
+  async function handleSaveEditItem(itemId) {
+    setEditSaving(true);
+    try {
+      const payload = { ...editForm, price: Number(editForm.price) || 0 };
+      await updateShopItem(itemId, payload);
+      setItems((prev) => prev.map((i) => i.id === itemId ? { ...i, ...payload } : i));
+      setEditItemId("");
+      setEditForm({});
+    } catch (e) {
+      console.error("Error updating item:", e);
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function handleSaveEditPhotos(itemId) {
+    setEditPhotoSaving(true);
+    try {
+      await updateShopItemImages(itemId, editPhotoImages);
+      setItems((prev) => prev.map((i) => i.id === itemId ? { ...i, images: editPhotoImages } : i));
+      setEditPhotoItemId("");
+      setEditPhotoImages([]);
+      if (user?.uid) await loadShopActivity(user.uid);
+    } catch (e) {
+      console.error("Error updating photos:", e);
+    } finally {
+      setEditPhotoSaving(false);
     }
   }
 
@@ -1387,7 +1449,7 @@ export default function BoutiquePage() {
                   {item.images && item.images.length > 0 ? (
                     <div className="relative h-48 w-full overflow-hidden bg-slate-100">
                       <img
-                        src={item.images[0].url}
+                        src={typeof item.images[0] === "string" ? item.images[0] : item.images[0]?.url}
                         alt={item.title}
                         className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                         onError={(e) => {
@@ -1465,24 +1527,194 @@ export default function BoutiquePage() {
 
                     {/* Owner actions */}
                     {user && item.authorId === user.uid && (
-                      <div className="mt-4 flex flex-col gap-2 border-t border-[#f4e1e5] pt-4 sm:flex-row">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-1 rounded-xl border-[#f0d8dc] bg-white text-xs text-[#D63C54]"
-                          onClick={() => handleMarkSold(item.id)}
-                        >
-                          <CheckCircle2 className="mr-1 h-3 w-3" />
-                          {t("sell")}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="rounded-xl border-red-200 bg-white text-xs text-red-500 hover:bg-red-50 hover:text-red-600"
-                          onClick={() => handleDelete(item.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
+                      <div className="mt-4 flex flex-col gap-2 border-t border-[#f4e1e5] pt-4">
+                        <div className="flex gap-2 sm:flex-row">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 rounded-xl border-[#f0d8dc] bg-white text-xs text-[#D63C54]"
+                            onClick={() => handleMarkSold(item.id)}
+                          >
+                            <CheckCircle2 className="mr-1 h-3 w-3" />
+                            {t("sell")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 rounded-xl border-[#f0d8dc] bg-white text-xs text-[#D63C54]"
+                            onClick={() => openEditItem(item)}
+                          >
+                            <Pencil className="mr-1 h-3 w-3" />
+                            {language === "ht" ? "Modifye" : "Modifier"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 rounded-xl border-[#f0d8dc] bg-white text-xs text-[#D63C54]"
+                            onClick={() => {
+                              if (editPhotoItemId === item.id) {
+                                setEditPhotoItemId("");
+                                setEditPhotoImages([]);
+                              } else {
+                                setEditPhotoItemId(item.id);
+                                setEditPhotoImages(item.images || []);
+                              }
+                            }}
+                          >
+                            <ImageIcon className="mr-1 h-3 w-3" />
+                            {language === "ht" ? "Foto" : "Photos"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="rounded-xl border-red-200 bg-white text-xs text-red-500 hover:bg-red-50 hover:text-red-600"
+                            onClick={() => handleDelete(item.id)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        {editItemId === item.id && (
+                          <div className="rounded-2xl border border-[#f0d8dc] bg-[#fff8f9] p-3 space-y-3">
+                            <p className="text-xs font-medium text-slate-600">
+                              {language === "ht" ? "Modifye atik la" : "Modifier l'article"}
+                            </p>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">{t("itemName")} *</label>
+                                <Input
+                                  value={editForm.title || ""}
+                                  onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                                  className="rounded-xl border-[#e6d5db] bg-white text-xs shadow-sm h-8"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">{t("price")} (HTG) *</label>
+                                <Input
+                                  type="number"
+                                  value={editForm.price || ""}
+                                  onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
+                                  className="rounded-xl border-[#e6d5db] bg-white text-xs shadow-sm h-8"
+                                  min="0"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-500">{t("itemDescription")}</label>
+                              <Textarea
+                                value={editForm.description || ""}
+                                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                                className="min-h-[60px] rounded-xl border-[#e6d5db] bg-white text-xs shadow-sm"
+                              />
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-3">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">{t("allCategories")}</label>
+                                <select
+                                  value={editForm.category || ""}
+                                  onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                                  className="w-full rounded-xl border border-[#e6d5db] bg-white px-2 py-1 text-xs shadow-sm"
+                                >
+                                  {categories.filter((c) => c.id !== "all").map((c) => (
+                                    <option key={c.id} value={c.id}>{c.label}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">{t("condition")}</label>
+                                <select
+                                  value={editForm.condition || "good"}
+                                  onChange={(e) => setEditForm({ ...editForm, condition: e.target.value })}
+                                  className="w-full rounded-xl border border-[#e6d5db] bg-white px-2 py-1 text-xs shadow-sm"
+                                >
+                                  <option value="new">{t("new")}</option>
+                                  <option value="like-new">{t("likeNew")}</option>
+                                  <option value="good">{t("good")}</option>
+                                  <option value="used">{t("used")}</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">{t("location")}</label>
+                                <Input
+                                  value={editForm.location || ""}
+                                  onChange={(e) => setEditForm({ ...editForm, location: e.target.value })}
+                                  className="rounded-xl border-[#e6d5db] bg-white text-xs shadow-sm h-8"
+                                />
+                              </div>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">{t("contactInfo")}</label>
+                                <Input
+                                  value={editForm.contact || ""}
+                                  onChange={(e) => setEditForm({ ...editForm, contact: e.target.value })}
+                                  className="rounded-xl border-[#e6d5db] bg-white text-xs shadow-sm h-8"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">📱 MonCash</label>
+                                <Input
+                                  value={editForm.moncashPhone || ""}
+                                  onChange={(e) => setEditForm({ ...editForm, moncashPhone: e.target.value })}
+                                  placeholder="+509 34 56 78 90"
+                                  className="rounded-xl border-[#e6d5db] bg-white text-xs shadow-sm h-8"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                className="flex-1 rounded-xl bg-[#D63C54] text-xs text-white hover:bg-[#C02D45]"
+                                onClick={() => handleSaveEditItem(item.id)}
+                                disabled={editSaving || !editForm.title || !editForm.price}
+                              >
+                                {editSaving
+                                  ? (language === "ht" ? "Ap sove..." : "Enregistrement...")
+                                  : (language === "ht" ? "Sove chanjman" : "Enregistrer")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="rounded-xl border-[#f0d8dc] text-xs"
+                                onClick={() => { setEditItemId(""); setEditForm({}); }}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {editPhotoItemId === item.id && (
+                          <div className="rounded-2xl border border-[#f0d8dc] bg-[#fff8f9] p-3">
+                            <p className="mb-2 text-xs font-medium text-slate-600">
+                              {language === "ht" ? "Chanje foto atik la" : "Modifier les photos de l'article"}
+                            </p>
+                            <ImageUpload
+                              images={editPhotoImages}
+                              onChange={setEditPhotoImages}
+                              maxImages={5}
+                              pathPrefix={`shop-items/${user.uid}`}
+                            />
+                            <div className="mt-3 flex gap-2">
+                              <Button
+                                size="sm"
+                                className="flex-1 rounded-xl bg-[#D63C54] text-xs text-white hover:bg-[#C02D45]"
+                                onClick={() => handleSaveEditPhotos(item.id)}
+                                disabled={editPhotoSaving}
+                              >
+                                {editPhotoSaving
+                                  ? (language === "ht" ? "Ap sove..." : "Enregistrement...")
+                                  : (language === "ht" ? "Sove foto" : "Enregistrer les photos")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="rounded-xl border-[#f0d8dc] text-xs"
+                                onClick={() => { setEditPhotoItemId(""); setEditPhotoImages([]); }}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1549,6 +1781,55 @@ export default function BoutiquePage() {
         closeLabel={t("close")}
         onClose={() => setDialogState((prev) => ({ ...prev, open: false }))}
       />
+
+      {betaNoticeOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" />
+          <div className="relative w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-[2rem] border border-rose-100 bg-white shadow-[0_40px_80px_-24px_rgba(15,23,42,0.28),0_20px_40px_-20px_rgba(225,29,72,0.18)]">
+            <div className="bg-[linear-gradient(135deg,_rgba(255,241,242,0.95)_0%,_rgba(255,247,237,0.98)_100%)] px-6 pt-6 pb-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-xl shadow-sm">
+                  🛍️
+                </div>
+                <div>
+                  <span className="inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                    {t("boutiqueBetaBadge")}
+                  </span>
+                  <h2 className="mt-1 text-base font-semibold text-slate-900">{t("boutiqueBetaTitle")}</h2>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-5 space-y-3">
+              <div className="flex items-start gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+                <span className="mt-0.5 text-base">📦</span>
+                <p className="text-sm leading-6 text-slate-700">{t("boutiqueBetaBody1")}</p>
+              </div>
+              <div className="flex items-start gap-3 rounded-2xl bg-emerald-50 px-4 py-3">
+                <span className="mt-0.5 text-base">✅</span>
+                <p className="text-sm leading-6 text-slate-700">{t("boutiqueBetaBody2")}</p>
+              </div>
+              <div className="flex items-start gap-3 rounded-2xl bg-blue-50 px-4 py-3">
+                <span className="mt-0.5 text-base">💳</span>
+                <p className="text-sm leading-6 text-slate-700">{t("boutiqueBetaBody3")}</p>
+              </div>
+              <div className="flex items-start gap-3 rounded-2xl bg-rose-50 px-4 py-3">
+                <span className="mt-0.5 text-base">🏷️</span>
+                <p className="text-sm leading-6 text-slate-700">{t("boutiqueBetaBody4")}</p>
+              </div>
+              <p className="px-1 pt-1 text-xs leading-5 text-slate-400">{t("boutiqueBetaFooter")}</p>
+            </div>
+            <div className="border-t border-slate-100 px-6 py-4">
+              <button
+                type="button"
+                className="w-full rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 py-3 text-sm font-semibold text-white shadow-[0_8px_20px_-10px_rgba(225,29,72,0.45)] transition hover:opacity-90 active:scale-[0.98]"
+                onClick={() => setBetaNoticeOpen(false)}
+              >
+                {t("boutiqueBetaCta")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

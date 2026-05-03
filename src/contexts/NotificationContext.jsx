@@ -194,7 +194,7 @@ function relocalizeNotification(notification, notificationText) {
       ...notification,
       title: `${notificationText.chessInviteTitle} ${senderName}`,
       message: notificationText.chessInviteMessage,
-      link: gameId ? `/games#chess-game` : (notification.link || "/games#chess-game"),
+      link: gameId ? "/games" : (notification.link || "/games"),
       data: {
         ...rawData,
         gameId,

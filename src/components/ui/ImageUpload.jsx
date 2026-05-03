@@ -9,7 +9,7 @@ import { X, Upload, Camera, Plus, AlertCircle } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function ImageUpload({ images = [], onChange, maxImages = 5, pathPrefix = "shop-items" }) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [uploadError, setUploadError] = useState("");
@@ -23,7 +23,11 @@ export default function ImageUpload({ images = [], onChange, maxImages = 5, path
 
     const storage = getFirebaseStorage();
     if (!storage) {
-      setUploadError(t("uploadError"));
+      setUploadError(
+        language === "ht"
+          ? "Sèvis estokaj imaj la pa konfigire. Kontakte administratè a."
+          : "Le service de stockage d'images n'est pas configuré (FIREBASE_STORAGE_BUCKET manquant)."
+      );
       return;
     }
 
@@ -57,7 +61,18 @@ export default function ImageUpload({ images = [], onChange, maxImages = 5, path
         });
       } catch (error) {
         console.error("Error uploading image:", error);
-        setUploadError(t("uploadError"));
+        const code = error?.code || "";
+        let msg = t("uploadError");
+        if (code === "storage/unauthorized") {
+          msg = language === "ht"
+            ? "Ou pa gen pèmisyon pou telechaje imaj. Asire ou konekte."
+            : "Vous n'avez pas la permission d'uploader. Vérifiez que vous êtes connecté(e).";
+        } else if (code === "storage/unknown" || code.includes("cors")) {
+          msg = language === "ht"
+            ? "Erè rezo. Verifye règ CORS Firebase Storage ou."
+            : "Erreur réseau. Vérifiez la configuration CORS de Firebase Storage.";
+        }
+        setUploadError(msg);
       }
     }
 

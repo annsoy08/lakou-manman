@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { MessageCircle, Users, BookOpen, ShoppingBag, Wrench, Mail, MapPin, Phone, Heart, Shield, Baby, Gamepad2 } from "lucide-react";
+import Image from "next/image";
+import { MessageCircle, Users, BookOpen, ShoppingBag, Wrench, Mail, MapPin, Phone, Heart, Shield, Baby, Gamepad2, HeartHandshake } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function Footer() {
@@ -31,11 +32,39 @@ export default function Footer() {
   return (
     <footer className="mt-16">
       <div className="border-t border-[#24324a] bg-[radial-gradient(circle_at_top_left,_rgba(155,35,53,0.18),_transparent_24%),linear-gradient(180deg,_#151d31_0%,_#11192b_100%)] text-white">
+
+        {/* Community Support Banner */}
+        <div className="border-b border-white/10 bg-gradient-to-r from-rose-800 via-[#9b2335] to-rose-900">
+          <div className="app-shell-container py-7">
+            <div className="flex flex-col items-center justify-between gap-5 sm:flex-row">
+              <div className="flex items-center gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/15 shadow-lg">
+                  <HeartHandshake className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <div className="text-lg font-bold tracking-tight text-white">
+                    {t("communitySupport") || "Soutien Communautaire"}
+                  </div>
+                  <div className="mt-0.5 text-sm text-rose-100/90">
+                    {t("communitySupportFooterDesc") || "Demandez ou proposez de l'aide — la communauté est là pour vous."}
+                  </div>
+                </div>
+              </div>
+              <Link
+                href="/soutien"
+                className="shrink-0 rounded-xl bg-white px-5 py-2.5 text-sm font-semibold text-rose-800 shadow-lg transition-all hover:bg-rose-50 hover:shadow-xl active:scale-[0.98]"
+              >
+                {t("communitySupportCTA") || "Rejoindre le soutien"}
+              </Link>
+            </div>
+          </div>
+        </div>
+
         <div className="app-shell-container py-14">
           <div className="grid gap-10 border-b border-white/10 pb-10 md:grid-cols-4">
             <div className="md:col-span-1">
               <div className="flex items-center gap-3">
-                <img src="/logo-lakou-manman.png" alt="Lakou Manman" className="h-14 w-auto rounded-xl" />
+                <Image src="/logo-lakou-manman.png" alt="Lakou Manman" width={56} height={56} className="h-14 w-auto rounded-xl" />
                 <div>
                   <span className="text-2xl font-bold tracking-tight text-white">
                     Lakou Manman

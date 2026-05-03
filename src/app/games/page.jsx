@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNotifications } from "@/contexts/NotificationContext";
@@ -9,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { commitChessGameMove, createChessGameSession, createChessInviteNotification, getAllDiscoverableUsers, sendChessGameMessage, subscribeToChessGameMessages, subscribeToChessGameSession, subscribeToUserChessGames, triggerChessInviteEmailNotification, updateChessGameSession } from "@/lib/firestore";
+import { clearChessPresence, commitChessGameMove, createChessGameSession, createChessInviteNotification, getAllDiscoverableUsers, sendChessGameMessage, setChessPresence, subscribeToChessGameMessages, subscribeToChessGameSession, subscribeToChessPresence, subscribeToUserChessGames, triggerChessInviteEmailNotification, updateChessGameSession } from "@/lib/firestore";
 import { trackError } from "@/lib/telemetry";
 import { resolveUserDisplayName } from "@/lib/utils";
 import { ArrowRight, BookOpen, Brain, CheckCircle2, Clock3, Gamepad2, MessageSquare, Rocket, RotateCcw, Send, Sparkles, Trophy, Users, XCircle } from "lucide-react";
@@ -94,6 +95,7 @@ const CHESS_STARTING_COUNTS = {
   },
 };
 const CHESS_TOURNAMENT_ROUND_SECONDS = 5 * 60;
+const CHESS_PLAYER_TIME_SECONDS = 10 * 60;
 const DISCOVERABLE_USERS_LIMIT = 120;
 const MONTESSORI_SORT_ITEMS = [
   { id: "gold-round", shape: "round", color: "gold", symbol: "●", colorClassName: "border-amber-200 bg-amber-50 text-amber-600" },
@@ -397,8 +399,124 @@ function getChessMoves(board, row, col) {
     });
 }
 
+function findKingPosition(board, color) {
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r][c];
+      if (piece && piece.color === color && piece.type === "king") {
+        return { row: r, col: c };
+      }
+    }
+  }
+  return null;
+}
+
+function isKingInCheck(board, color) {
+  const kingPos = findKingPosition(board, color);
+  if (!kingPos) return false;
+  const opponentColor = color === "white" ? "black" : "white";
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r][c];
+      if (!piece || piece.color !== opponentColor) continue;
+      const moves = getChessMoves(board, r, c);
+      if (moves.some((m) => m.row === kingPos.row && m.col === kingPos.col)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function getLegalChessMoves(board, row, col) {
+  const piece = board[row][col];
+  if (!piece) return [];
+  return getChessMoves(board, row, col).filter((move) => {
+    const next = cloneChessBoard(board);
+    next[move.row][move.col] = next[row][col];
+    next[row][col] = null;
+    return !isKingInCheck(next, piece.color);
+  });
+}
+
+function hasAnyLegalMoves(board, color) {
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r][c];
+      if (piece && piece.color === color && getLegalChessMoves(board, r, c).length > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function toChessSquare(row, col) {
   return `${CHESS_FILES[col]}${8 - row}`;
+}
+
+const AI_PIECE_VALUES = { pawn: 10, knight: 30, bishop: 30, rook: 50, queen: 90, king: 1000 };
+
+function evaluateChessBoardForAI(board) {
+  let score = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r][c];
+      if (!piece) continue;
+      const val = AI_PIECE_VALUES[piece.type] || 0;
+      score += piece.color === "black" ? val : -val;
+    }
+  }
+  return score;
+}
+
+function applyAIChessMove(board, from, to) {
+  const next = cloneChessBoard(board);
+  const piece = next[from.row][from.col];
+  const movedPiece = piece.type === "pawn" && (to.row === 0 || to.row === 7) ? { ...piece, type: "queen" } : piece;
+  next[to.row][to.col] = movedPiece;
+  next[from.row][from.col] = null;
+  return next;
+}
+
+function getAllLegalMovesForColor(board, color) {
+  const moves = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r][c];
+      if (!piece || piece.color !== color) continue;
+      getLegalChessMoves(board, r, c).forEach((to) => moves.push({ from: { row: r, col: c }, to }));
+    }
+  }
+  return moves;
+}
+
+function minimaxChess(board, depth, alpha, beta, maximizing, deadline) {
+  const color = maximizing ? "black" : "white";
+  if (depth === 0 || (deadline && Date.now() > deadline)) return { score: evaluateChessBoardForAI(board), move: null };
+  const moves = getAllLegalMovesForColor(board, color);
+  if (moves.length === 0) {
+    return { score: isKingInCheck(board, color) ? (maximizing ? -9999 : 9999) : 0, move: null };
+  }
+  let bestScore = maximizing ? -Infinity : Infinity;
+  let bestMove = moves[0];
+  for (const move of moves) {
+    if (deadline && Date.now() > deadline) break;
+    const nextBoard = applyAIChessMove(board, move.from, move.to);
+    const { score } = minimaxChess(nextBoard, depth - 1, alpha, beta, !maximizing, deadline);
+    if (maximizing ? score > bestScore : score < bestScore) {
+      bestScore = score;
+      bestMove = move;
+    }
+    if (maximizing) { alpha = Math.max(alpha, bestScore); } else { beta = Math.min(beta, bestScore); }
+    if (beta <= alpha) break;
+  }
+  return { score: bestScore, move: bestMove };
+}
+
+function pickBestAIChessMove(board, depth = 2, budgetMs = 1500) {
+  const deadline = Date.now() + budgetMs;
+  return minimaxChess(board, depth, -Infinity, Infinity, true, deadline).move;
 }
 
 function formatCountdown(totalSeconds) {
@@ -410,9 +528,10 @@ function formatCountdown(totalSeconds) {
 }
 
 export default function GamesPage() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const { user, userProfile } = useAuth();
   const { notifySystem } = useNotifications();
+  const searchParams = useSearchParams();
   const [memoryCards, setMemoryCards] = useState(() => buildMemoryDeck());
   const [selectedCards, setSelectedCards] = useState([]);
   const [memoryMoves, setMemoryMoves] = useState(0);
@@ -481,6 +600,17 @@ export default function GamesPage() {
   const [activeSharedChessGame, setActiveSharedChessGame] = useState(null);
   const [platformNotice, setPlatformNotice] = useState({ key: "gamesChessPlatformInviteReady", values: {} });
   const [isChessMoveSyncing, setIsChessMoveSyncing] = useState(false);
+  const [isAIThinking, setIsAIThinking] = useState(false);
+  const [aiDifficulty, setAiDifficulty] = useState("medium");
+  const [aiThinkingElapsed, setAiThinkingElapsed] = useState(0);
+  const [whiteTimeLeft, setWhiteTimeLeft] = useState(CHESS_PLAYER_TIME_SECONDS);
+  const [blackTimeLeft, setBlackTimeLeft] = useState(CHESS_PLAYER_TIME_SECONDS);
+  const [chessGameOver, setChessGameOver] = useState(false);
+  const [chessGameResult, setChessGameResult] = useState(null);
+  const [opponentSearch, setOpponentSearch] = useState("");
+  const [chessOnlineUsers, setChessOnlineUsers] = useState({});
+  const [chessIsPaused, setChessIsPaused] = useState(false);
+  const [chessAbandonConfirmOpen, setChessAbandonConfirmOpen] = useState(false);
   const [montessoriSortIndex, setMontessoriSortIndex] = useState(0);
   const [montessoriSortSelections, setMontessoriSortSelections] = useState([]);
   const [montessoriSortFeedback, setMontessoriSortFeedback] = useState("idle");
@@ -492,6 +622,9 @@ export default function GamesPage() {
   const [chessChatInput, setChessChatInput] = useState("");
   const [chessChatSending, setChessChatSending] = useState(false);
   const chessChatEndRef = useRef(null);
+  const chessChatPrevCountRef = useRef(0);
+  const chessChatInitialRef = useRef(true);
+  const aiThinkingRef = useRef(false);
 
   const quizQuestions = [
     {
@@ -904,10 +1037,118 @@ export default function GamesPage() {
         : "border-rose-100/70 bg-white/85 text-slate-600";
 
   useEffect(() => {
+    if (!isAIThinking) { setAiThinkingElapsed(0); return; }
+    const interval = setInterval(() => setAiThinkingElapsed((prev) => prev + 1), 1000);
+    return () => clearInterval(interval);
+  }, [isAIThinking]);
+
+  useEffect(() => {
+    const clockModes = ["solo", "duel"];
+    if (!clockModes.includes(chessPlayMode) || chessGameOver || chessIsPaused || isPlatformChessActive) return;
+    const interval = setInterval(() => {
+      if (chessTurn === "white") {
+        setWhiteTimeLeft((prev) => {
+          if (prev <= 1) {
+            setChessGameOver(true);
+            setChessGameResult("timeout");
+            setChessBoardMessage(language === "ht" ? "Tan ou fini ! Nwa genyen." : "Temps écoulé ! Les noirs gagnent.");
+            return 0;
+          }
+          return prev - 1;
+        });
+      } else {
+        setBlackTimeLeft((prev) => {
+          if (prev <= 1) {
+            setChessGameOver(true);
+            setChessGameResult("timeout");
+            setChessBoardMessage(language === "ht" ? "Tan IA fini ! Blan genyen." : "Temps écoulé ! Les blancs gagnent.");
+            return 0;
+          }
+          return prev - 1;
+        });
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [chessPlayMode, chessTurn, chessGameOver, chessIsPaused, isPlatformChessActive, language]);
+
+  useEffect(() => {
+    if (chessPlayMode !== "solo" || chessTurn !== "black" || chessGameOver) return;
+    if (aiThinkingRef.current) return;
+    aiThinkingRef.current = true;
+    setIsAIThinking(true);
+    setAiThinkingElapsed(0);
+    setChessBoardMessage(language === "ht" ? "IA ap réfléchi..." : "L'IA réfléchit...");
+    const timeout = setTimeout(() => {
+      const depth = aiDifficulty === "easy" ? 1 : 2;
+      const budgetMs = aiDifficulty === "easy" ? 300 : aiDifficulty === "hard" ? 900 : 600;
+      const move = pickBestAIChessMove(chessBoard, depth, budgetMs);
+      if (!move) { aiThinkingRef.current = false; setIsAIThinking(false); return; }
+      const { from, to } = move;
+      const nextBoard = cloneChessBoard(chessBoard);
+      const movingPiece = nextBoard[from.row][from.col];
+      const capturedPiece = nextBoard[to.row][to.col];
+      const movedPiece = movingPiece.type === "pawn" && (to.row === 0 || to.row === 7) ? { ...movingPiece, type: "queen" } : movingPiece;
+      nextBoard[to.row][to.col] = movedPiece;
+      nextBoard[from.row][from.col] = null;
+      const opponentInCheck = isKingInCheck(nextBoard, "white");
+      const opponentHasMoves = hasAnyLegalMoves(nextBoard, "white");
+      let msg = capturedPiece
+        ? (language === "ht" ? `IA: l'a pran ${capturedPiece.type}` : `IA: capture un ${capturedPiece.type}`)
+        : (language === "ht" ? "IA a jwe." : "L'IA a joué.");
+      if (!opponentHasMoves) {
+        if (opponentInCheck) {
+          setChessGameOver(true);
+          setChessGameResult("checkmate");
+          msg = language === "ht" ? "Echèk e mat ! IA genyen." : "Échec et mat ! L'IA gagne.";
+        } else {
+          setChessGameOver(true);
+          setChessGameResult("stalemate");
+          msg = language === "ht" ? "Pat !" : "Pat !";
+        }
+      } else if (opponentInCheck) {
+        msg = language === "ht" ? "Echèk !" : "Échec !";
+      }
+      setChessBoard(nextBoard);
+      setLastChessMove({ from, to });
+      setChessTurn("white");
+      setChessBoardMessage(msg);
+      setSelectedBoardSquare(null);
+      setLegalChessMoves([]);
+      aiThinkingRef.current = false;
+      setIsAIThinking(false);
+    }, 300);
+    return () => {
+      clearTimeout(timeout);
+      aiThinkingRef.current = false;
+    };
+  }, [chessPlayMode, chessTurn, chessGameOver, chessBoard, language, aiDifficulty]);
+
+  useEffect(() => {
     if (chessPlayMode !== "tournament" && isTournamentRunning) {
       setIsTournamentRunning(false);
     }
   }, [chessPlayMode, isTournamentRunning]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const uid = user.uid;
+    setChessPresence(uid).catch(() => {});
+    const interval = setInterval(() => {
+      setChessPresence(uid).catch(() => {});
+    }, 60000);
+    return () => {
+      clearInterval(interval);
+      clearChessPresence(uid).catch(() => {});
+    };
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    return subscribeToChessPresence(
+      (online) => setChessOnlineUsers(online),
+      () => {}
+    );
+  }, [user?.uid]);
 
   useEffect(() => {
     if (!user?.uid) {
@@ -1006,6 +1247,7 @@ export default function GamesPage() {
   }, [activeSharedChessGameId, user?.uid]);
 
   useEffect(() => {
+    chessChatInitialRef.current = true;
     if (!activeSharedChessGameId) {
       setChessChatMessages([]);
       return () => {};
@@ -1019,9 +1261,15 @@ export default function GamesPage() {
   }, [activeSharedChessGameId]);
 
   useEffect(() => {
-    if (chessChatEndRef.current) {
+    if (chessChatInitialRef.current) {
+      chessChatInitialRef.current = false;
+      chessChatPrevCountRef.current = chessChatMessages.length;
+      return;
+    }
+    if (chessChatMessages.length > chessChatPrevCountRef.current && chessChatEndRef.current) {
       chessChatEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
+    chessChatPrevCountRef.current = chessChatMessages.length;
   }, [chessChatMessages]);
 
   useEffect(() => {
@@ -1035,7 +1283,29 @@ export default function GamesPage() {
     setSelectedBoardSquare(null);
     setLegalChessMoves([]);
     setChessBoardMessage("");
+    const remoteStatus = String(activeSharedChessGame.status || "").toLowerCase();
+    if (remoteStatus === "checkmate" || remoteStatus === "stalemate" || remoteStatus === "resigned") {
+      setChessGameOver(true);
+      setChessGameResult(remoteStatus);
+      if (remoteStatus === "resigned" && activeSharedChessGame.boardMessage) {
+        setChessBoardMessage(activeSharedChessGame.boardMessage);
+      }
+    } else {
+      setChessGameOver(false);
+      setChessGameResult(null);
+    }
   }, [activeSharedChessGame, isPlatformChessActive, t]);
+
+  useEffect(() => {
+    if (!searchParams || !userChessGames.length) return;
+    const urlGameId = searchParams.get("gameId");
+    if (!urlGameId) return;
+    const matchingGame = userChessGames.find((g) => g.id === urlGameId);
+    if (matchingGame) {
+      setActiveSharedChessGameId(urlGameId);
+      setChessPlayMode("duel");
+    }
+  }, [searchParams, userChessGames]);
 
   useEffect(() => {
     if (chessPlayMode !== "tournament") {
@@ -1098,6 +1368,13 @@ export default function GamesPage() {
     setLegalChessMoves([]);
     setLastChessMove(null);
     setChessBoardMessage("");
+    setChessGameOver(false);
+    setChessGameResult(null);
+    setChessIsPaused(false);
+    setWhiteTimeLeft(CHESS_PLAYER_TIME_SECONDS);
+    setBlackTimeLeft(CHESS_PLAYER_TIME_SECONDS);
+    aiThinkingRef.current = false;
+    setIsAIThinking(false);
   }
 
   function getPlatformMemberName(member) {
@@ -1199,6 +1476,23 @@ export default function GamesPage() {
       return;
     }
 
+    const finishedStatuses = ["checkmate", "stalemate", "resigned"];
+    const activeGamesWithOthers = userChessGames.filter((game) => {
+      const status = String(game.status || "").toLowerCase();
+      if (finishedStatuses.includes(status)) return false;
+      const opponentInGame = game.participants?.find((p) => p !== user?.uid);
+      return opponentInGame && opponentInGame !== selectedChessOpponentId;
+    });
+    if (activeGamesWithOthers.length > 0) {
+      const currentOpponentName = getChessGameOpponentName(activeGamesWithOthers[0]) || "un adversaire";
+      setPlatformNotice({
+        key: "gamesChessPlatformAlreadyActive",
+        values: { name: currentOpponentName },
+      });
+      handleOpenSharedChessGame(activeGamesWithOthers[0].id);
+      return;
+    }
+
     try {
       const { gameId, opponentName } = await ensureSharedChessInvite(selectedChessOpponent);
       const invitedName = opponentName || (selectedChessOpponent ? getPlatformMemberName(selectedChessOpponent) : "");
@@ -1208,7 +1502,10 @@ export default function GamesPage() {
         key: "gamesChessPlatformInviteSent",
         values: { name: invitedName },
       });
-      notifySystem(t("gamesChessPlatformInvite"), t("gamesChessPlatformInviteSent", { name: invitedName }), "/games#chess-game");
+      notifySystem(t("gamesChessPlatformInvite"), t("gamesChessPlatformInviteSent", { name: invitedName }), "/games");
+      setTimeout(() => {
+        document.getElementById("chess-board-area")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 300);
     } catch (error) {
       trackError(error, {
         scope: "games_create_platform_chess_game",
@@ -1223,10 +1520,39 @@ export default function GamesPage() {
     }
   }
 
+  function handleChessTogglePause() {
+    setChessIsPaused((prev) => !prev);
+  }
+
+  function handleChessAbandon() {
+    setChessAbandonConfirmOpen(true);
+  }
+
+  async function confirmChessAbandon() {
+    setChessAbandonConfirmOpen(false);
+    const resignerName = resolvedTournamentUsername || "Joueur";
+    const abandonMessage = t("gamesChessBoardAbandonResult", { name: resignerName });
+    setChessGameOver(true);
+    setChessGameResult("resigned");
+    setChessBoardMessage(abandonMessage);
+    if (isPlatformChessActive && activeSharedChessGameId) {
+      try {
+        await updateChessGameSession(activeSharedChessGameId, {
+          status: "resigned",
+          boardMessage: abandonMessage,
+          resignedBy: user?.uid || "",
+        });
+      } catch {}
+    }
+  }
+
   function handleOpenSharedChessGame(gameId) {
     setActiveSharedChessGameId(gameId);
     setChessPlayMode("duel");
     setPlatformNotice({ key: "gamesChessPlatformLoaded", values: {} });
+    setTimeout(() => {
+      document.getElementById("chess-board-area")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 120);
   }
 
   async function handleResetSharedChessGame() {
@@ -1235,6 +1561,9 @@ export default function GamesPage() {
     }
 
     setIsChessMoveSyncing(true);
+    setChessGameOver(false);
+    setChessGameResult(null);
+    setChessIsPaused(false);
     try {
       await updateChessGameSession(activeSharedChessGameId, {
         board: buildChessBoard(),
@@ -1399,7 +1728,7 @@ export default function GamesPage() {
         },
       ]);
       setTournamentNotice({ key: "gamesChessTournamentInviteSent", values: { name: invitedName } });
-      notifySystem(t("gamesChessTournamentInviteMember"), t("gamesChessTournamentInviteSent", { name: invitedName }), "/games#chess-game");
+      notifySystem(t("gamesChessTournamentInviteMember"), t("gamesChessTournamentInviteSent", { name: invitedName }), "/games");
     } catch (error) {
       trackError(error, {
         scope: "games_invite_tournament_member",
@@ -1461,7 +1790,7 @@ export default function GamesPage() {
   }
 
   async function handleChessBoardSquareClick(row, col) {
-    if (isChessMoveSyncing) {
+    if (isChessMoveSyncing || chessGameOver || chessIsPaused || isAIThinking) {
       return;
     }
 
@@ -1483,7 +1812,7 @@ export default function GamesPage() {
         return;
       }
 
-      const nextMoves = getChessMoves(chessBoard, row, col);
+      const nextMoves = getLegalChessMoves(chessBoard, row, col);
       setSelectedBoardSquare({ row, col });
       setLegalChessMoves(nextMoves);
       setChessBoardMessage(
@@ -1518,17 +1847,39 @@ export default function GamesPage() {
       nextBoard[row][col] = movedPiece;
       nextBoard[moveFrom.row][moveFrom.col] = null;
 
-      const nextBoardMessage =
+      const baseBoardMessage =
         capturedPiece
           ? t("gamesChessBoardCapture", { piece: getChessPieceLabel(capturedPiece) })
           : t("gamesChessBoardMoved", { piece: getChessPieceLabel(movedPiece), square: toChessSquare(row, col) });
+
+      const opponentInCheck = isKingInCheck(nextBoard, nextTurn);
+      const opponentHasMoves = hasAnyLegalMoves(nextBoard, nextTurn);
+      let gameStatus = "active";
+      let finalBoardMessage = baseBoardMessage;
+
+      if (!opponentHasMoves) {
+        if (opponentInCheck) {
+          gameStatus = "checkmate";
+          finalBoardMessage = t("gamesChessBoardCheckmate", { color: t(chessTurn === "white" ? "gamesChessBoardWhite" : "gamesChessBoardBlack") });
+          setChessGameOver(true);
+          setChessGameResult("checkmate");
+        } else {
+          gameStatus = "stalemate";
+          finalBoardMessage = t("gamesChessBoardStalemate");
+          setChessGameOver(true);
+          setChessGameResult("stalemate");
+        }
+      } else if (opponentInCheck) {
+        gameStatus = "check";
+        finalBoardMessage = t("gamesChessBoardCheck");
+      }
 
       setChessBoard(nextBoard);
       setLastChessMove(nextLastMove);
       setSelectedBoardSquare(null);
       setLegalChessMoves([]);
       setChessTurn(nextTurn);
-      setChessBoardMessage(nextBoardMessage);
+      setChessBoardMessage(finalBoardMessage);
 
       if (isPlatformChessActive && activeSharedChessGameId) {
         setIsChessMoveSyncing(true);
@@ -1539,7 +1890,7 @@ export default function GamesPage() {
             turn: nextTurn,
             lastMove: nextLastMove,
             boardMessage: "",
-            status: "active",
+            status: gameStatus,
           });
         } catch (error) {
           trackError(error, {
@@ -1551,6 +1902,8 @@ export default function GamesPage() {
           setChessTurn(previousTurn);
           setLastChessMove(previousLastMove || null);
           setChessBoardMessage(previousBoardMessage || t("gamesChessBoardHelp"));
+          setChessGameOver(false);
+          setChessGameResult(null);
           setPlatformNotice({
             key: getChessMoveNoticeKeyFromError(error),
             values: {},
@@ -1565,7 +1918,7 @@ export default function GamesPage() {
     }
 
     if (clickedPiece && clickedPiece.color === chessTurn) {
-      const nextMoves = getChessMoves(chessBoard, row, col);
+      const nextMoves = getLegalChessMoves(chessBoard, row, col);
       setSelectedBoardSquare({ row, col });
       setLegalChessMoves(nextMoves);
       setChessBoardMessage(
@@ -1738,9 +2091,6 @@ export default function GamesPage() {
                 <a href="#games-playground" className="inline-flex w-full items-center justify-center rounded-2xl bg-white px-5 py-2.5 text-sm font-medium text-[#7f1d1d] shadow-sm transition-transform hover:scale-[1.02] sm:w-auto">
                   {t("gamesHeroJumpToGames")}
                 </a>
-                <a href="#chess-game" className="inline-flex w-full items-center justify-center rounded-2xl border border-white/25 bg-white/10 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-white/18 sm:w-auto">
-                  {t("gamesHeroJumpToChess")}
-                </a>
               </div>
               </div>
 
@@ -1784,7 +2134,6 @@ export default function GamesPage() {
                     </Badge>
                   </div>
                 </div>
-
                 <div className="flex flex-col justify-between gap-4 bg-[linear-gradient(180deg,_rgba(255,255,255,0.12)_0%,_rgba(127,29,29,0.16)_100%)] px-5 py-5 sm:px-6 sm:py-6">
                   <div>
                     <div className="text-xs font-medium uppercase tracking-[0.22em] text-white/75">{t("gamesVisionBadge")}</div>
@@ -1797,71 +2146,6 @@ export default function GamesPage() {
           </div>
         </div>
       </Card>
-
-      <section id="kids-vision" className="space-y-4">
-        <div className="max-w-3xl">
-          <Badge className="rounded-full bg-rose-100 text-rose-700 hover:bg-rose-100">
-            {t("gamesVisionBadge")}
-          </Badge>
-          <h2 className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">{t("gamesVisionTitle")}</h2>
-          <p className="mt-3 text-sm leading-7 text-slate-600">{t("gamesVisionDesc")}</p>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-3">
-          {ecosystemPillars.map((pillar) => {
-            const Icon = pillar.icon;
-            return (
-              <Card key={pillar.id} className="rounded-[2rem] border border-[#ece2d8] bg-white/95 shadow-sm">
-                <CardContent className="p-6">
-                  <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${pillar.iconClassName}`}>
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <h3 className="mt-5 text-lg font-semibold text-slate-900">{pillar.title}</h3>
-                  <p className="mt-3 text-sm leading-7 text-slate-600">{pillar.description}</p>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="space-y-4">
-        <div className="max-w-3xl">
-          <Badge className="rounded-full bg-rose-100 text-rose-700 hover:bg-rose-100">
-            {t("gamesKidsBadge")}
-          </Badge>
-          <h2 className="mt-4 text-2xl font-semibold tracking-tight text-slate-900">{t("gamesUniverseTitle")}</h2>
-          <p className="mt-3 text-sm leading-7 text-slate-600">{t("gamesUniverseDesc")}</p>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {gameFamilies.map((family) => {
-            const Icon = family.icon;
-            return (
-              <Card key={family.id} className="rounded-[2rem] border border-sky-100 bg-[linear-gradient(180deg,_rgba(255,255,255,0.98)_0%,_rgba(240,249,255,0.98)_100%)] shadow-sm">
-                <CardContent className="p-5 sm:p-6">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-700">
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <Badge className={`rounded-full ${family.statusClassName} hover:opacity-90`}>
-                      {family.status}
-                    </Badge>
-                  </div>
-                  <h3 className="mt-5 text-lg font-semibold text-slate-900">{family.title}</h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-600 line-clamp-2">{family.description}</p>
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    {family.featureKeys.map((featureKey) => (
-                      <span key={featureKey} className="inline-flex items-center rounded-full border border-sky-100 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-[0_14px_30px_-28px_rgba(14,116,144,0.16)]">
-                        {t(featureKey)}
-                      </span>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      </section>
 
       <section id="games-playground" className="space-y-6">
         <div className="max-w-3xl">
@@ -1992,6 +2276,50 @@ export default function GamesPage() {
                 </div>
               </div>
 
+              {chessPlayMode === "solo" ? (
+                <div className="rounded-[1.6rem] border border-amber-100 bg-[linear-gradient(135deg,_rgba(255,251,235,0.98)_0%,_rgba(255,255,255,0.98)_100%)] p-5 shadow-[0_16px_32px_-26px_rgba(245,158,11,0.18)]">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-lg font-semibold text-slate-900">{language === "ht" ? "Nivo difikilte" : "Niveau de difficulté"}</h4>
+                      <p className="mt-1 text-sm text-slate-500">{language === "ht" ? "Chwazi ki jan IA a ka fò" : "Choisissez la force de l'IA"}</p>
+                    </div>
+                    {isAIThinking && (
+                      <div className="flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700">
+                        <div className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                        {language === "ht" ? "IA ap réfléchi" : "L'IA réfléchit"}
+                        <span className="tabular-nums">{aiThinkingElapsed}s</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-3">
+                    {[
+                      { id: "easy", label: language === "ht" ? "Fasil" : "Facile", desc: language === "ht" ? "Bon pou debitan" : "Pour débutants", color: "emerald" },
+                      { id: "medium", label: language === "ht" ? "Mwayen" : "Moyen", desc: language === "ht" ? "Yon bon defi" : "Un bon défi", color: "amber" },
+                      { id: "hard", label: language === "ht" ? "Difisil" : "Difficile", desc: language === "ht" ? "Pou ekspè" : "Pour experts", color: "rose" },
+                    ].map((level) => (
+                      <button
+                        key={level.id}
+                        type="button"
+                        disabled={isAIThinking}
+                        onClick={() => setAiDifficulty(level.id)}
+                        className={`rounded-[1.2rem] border px-3 py-3 text-left transition-all ${
+                          aiDifficulty === level.id
+                            ? level.color === "emerald" ? "border-emerald-300 bg-emerald-50 shadow-sm" : level.color === "amber" ? "border-amber-300 bg-amber-50 shadow-sm" : "border-rose-300 bg-rose-50 shadow-sm"
+                            : "border-slate-200 bg-white hover:border-slate-300"
+                        }`}
+                      >
+                        <div className={`text-sm font-semibold ${
+                          aiDifficulty === level.id
+                            ? level.color === "emerald" ? "text-emerald-800" : level.color === "amber" ? "text-amber-800" : "text-rose-800"
+                            : "text-slate-700"
+                        }`}>{level.label}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">{level.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               {chessPlayMode === "duel" ? (
                 <div className="rounded-[1.6rem] border border-rose-100 bg-white p-5 shadow-[0_16px_32px_-26px_rgba(225,29,72,0.18)]">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2026,22 +2354,47 @@ export default function GamesPage() {
                         {discoverableUsersLoading ? (
                           <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">...</div>
                         ) : discoverableUsers.length > 0 ? (
-                          <div className="mt-3 grid max-h-[26rem] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
-                            {discoverableUsers.map((member) => {
-                              const isSelected = selectedChessOpponentId === member.id;
-                              return (
-                                <button
-                                  key={member.id}
-                                  type="button"
-                                  onClick={() => setSelectedChessOpponentId(member.id)}
-                                  className={`min-w-0 rounded-[1.35rem] border px-4 py-4 text-left transition-all ${isSelected ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-white hover:border-rose-200 hover:bg-rose-50/70"}`}
-                                >
-                                  <div className="break-words text-sm font-semibold text-slate-900">{getPlatformMemberName(member)}</div>
-                                  <div className="mt-1 break-all text-xs leading-5 text-slate-500">{member.city || member.country || member.email || "Lakou Manman"}</div>
-                                </button>
+                          <>
+                            <Input
+                              type="text"
+                              value={opponentSearch}
+                              onChange={(e) => setOpponentSearch(e.target.value)}
+                              placeholder={t("gamesChessPlatformSearchPlaceholder")}
+                              className="mt-3 rounded-2xl border-slate-200 bg-slate-50 text-sm placeholder:text-slate-400 focus-visible:ring-rose-400"
+                            />
+                            {(() => {
+                              const filtered = discoverableUsers.filter((u) => {
+                                if (!opponentSearch.trim()) return true;
+                                return getPlatformMemberName(u).toLowerCase().includes(opponentSearch.trim().toLowerCase());
+                              });
+                              return filtered.length > 0 ? (
+                                <div className="mt-3 grid max-h-[26rem] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+                                  {filtered.map((member) => {
+                                    const isSelected = selectedChessOpponentId === member.id;
+                                    const isOnline = !!chessOnlineUsers[member.id];
+                                    return (
+                                      <button
+                                        key={member.id}
+                                        type="button"
+                                        onClick={() => setSelectedChessOpponentId(member.id)}
+                                        className={`min-w-0 rounded-[1.35rem] border px-4 py-4 text-left transition-all ${isSelected ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-white hover:border-rose-200 hover:bg-rose-50/70"}`}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          {isOnline ? <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" title="En ligne" /> : <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />}
+                                          <span className="break-words text-sm font-semibold text-slate-900">{getPlatformMemberName(member)}</span>
+                                        </div>
+                                        <div className="mt-1 break-all text-xs leading-5 text-slate-500">{isOnline ? "En ligne · " : ""}{member.city || member.country || member.email || "Lakou Manman"}</div>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
+                                  {t("gamesChessPlatformPlayersEmpty")}
+                                </div>
                               );
-                            })}
-                          </div>
+                            })()}
+                          </>
                         ) : (
                           <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500">
                             {t("gamesChessPlatformPlayersEmpty")}
@@ -2049,43 +2402,91 @@ export default function GamesPage() {
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-3">
-                        <Button type="button" className="rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 text-white hover:opacity-95" onClick={handleCreatePlatformChessGame}>
-                          {t("gamesChessPlatformInvite")}
-                        </Button>
-                        <span className="text-sm text-slate-500">{t("gamesChessPlatformContinueLocal")}</span>
-                      </div>
-
-                      <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{t("gamesChessPlatformGamesTitle")}</div>
-                          {isPlatformChessActive && activeSharedChessPlayerColor ? (
-                            <Badge className="rounded-full bg-white text-slate-700 hover:bg-white">
-                              {t("gamesChessPlatformYourColor")} {t(activeSharedChessPlayerColor === "white" ? "gamesChessBoardWhite" : "gamesChessBoardBlack")}
-                            </Badge>
-                          ) : null}
-                        </div>
-
-                        <div className="mt-4 space-y-3">
-                          {userChessGames.length > 0 ? (
-                            userChessGames.map((game) => (
-                              <div key={game.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white bg-white px-4 py-3 shadow-[0_12px_24px_-20px_rgba(15,23,42,0.16)]">
-                                <div>
-                                  <div className="text-sm font-semibold text-slate-900">{getChessGameOpponentName(game) || "Joueur"}</div>
-                                  <div className="mt-1 text-xs uppercase tracking-wide text-slate-400">{game.status}</div>
-                                </div>
-                                <Button type="button" variant="outline" className="rounded-2xl border-slate-300 text-slate-700" onClick={() => handleOpenSharedChessGame(game.id)}>
-                                  {t("gamesChessPlatformOpen")}
-                                </Button>
+                      {(() => {
+                        const finishedStatuses = ["checkmate", "stalemate", "resigned"];
+                        const hasActiveGameWithOther = userChessGames.some((game) => {
+                          const status = String(game.status || "").toLowerCase();
+                          if (finishedStatuses.includes(status)) return false;
+                          const opp = game.participants?.find((p) => p !== user?.uid);
+                          return opp && opp !== selectedChessOpponentId;
+                        });
+                        return (
+                          <div className="space-y-3">
+                            {hasActiveGameWithOther ? (
+                              <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
+                                <span className="mt-0.5 shrink-0">🔒</span>
+                                <span>{t("gamesChessPlatformAlreadyActive")}</span>
                               </div>
-                            ))
-                          ) : (
-                            <div className="rounded-2xl border border-white bg-white px-4 py-4 text-sm text-slate-500">
-                              {t("gamesChessPlatformGamesEmpty")}
-                            </div>
-                          )}
+                            ) : null}
+                            <Button
+                              type="button"
+                              className={`rounded-2xl text-white hover:opacity-95 ${hasActiveGameWithOther ? "bg-slate-400 cursor-not-allowed" : "bg-gradient-to-r from-rose-500 to-orange-500"}`}
+                              onClick={handleCreatePlatformChessGame}
+                            >
+                              {t("gamesChessPlatformInvite")}
+                            </Button>
+                            {!hasActiveGameWithOther ? (
+                              <p className="text-xs leading-5 text-slate-500">{t("gamesChessPlatformJoinFlow")}</p>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
+
+                      {userChessGames.length > 0 ? (
+                        <div className="rounded-[1.5rem] border border-slate-100 bg-slate-50 px-4 py-4">
+                          <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{t("gamesChessPlatformGamesTitle")}</div>
+                          <div className="mt-3 space-y-2">
+                            {(() => {
+                              const finishedStatuses = ["checkmate", "stalemate", "resigned"];
+                              const seen = new Set();
+                              return userChessGames
+                                .filter((game) => {
+                                  const status = String(game.status || "").toLowerCase();
+                                  if (finishedStatuses.includes(status)) return false;
+                                  const oppId = game.participants?.find((p) => p !== user?.uid) || game.id;
+                                  if (seen.has(oppId)) return false;
+                                  seen.add(oppId);
+                                  return true;
+                                })
+                                .slice(0, 6)
+                                .map((game) => {
+                                  const isActive = game.id === activeSharedChessGameId;
+                                  const opponentName = getChessGameOpponentName(game) || "Joueur";
+                                  const iAmHost = game.hostId === user?.uid;
+                                  const colorLabel = iAmHost ? t("gamesChessPlatformYouWhite") : t("gamesChessPlatformYouBlack");
+                                  return (
+                                    <div
+                                      key={game.id}
+                                      className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-4 py-3 transition-all ${
+                                        isActive
+                                          ? "border-rose-200 bg-rose-50 shadow-[0_8px_20px_-14px_rgba(225,29,72,0.28)]"
+                                          : "border-white bg-white shadow-[0_12px_24px_-20px_rgba(15,23,42,0.12)]"
+                                      }`}
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-2">
+                                          {isActive ? (
+                                            <span className="h-2 w-2 rounded-full bg-rose-500" />
+                                          ) : null}
+                                          <span className={`text-sm font-semibold ${isActive ? "text-rose-900" : "text-slate-900"}`}>{opponentName}</span>
+                                        </div>
+                                        <div className={`mt-0.5 text-xs leading-5 ${isActive ? "text-rose-600" : "text-slate-400"}`}>{colorLabel}</div>
+                                      </div>
+                                      <Button
+                                        type="button"
+                                        className={isActive ? "rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 text-white hover:opacity-95" : "rounded-2xl border-slate-200 text-slate-700"}
+                                        variant={isActive ? "default" : "outline"}
+                                        onClick={() => handleOpenSharedChessGame(game.id)}
+                                      >
+                                        {isActive ? t("gamesChessPlatformPlay") : t("gamesChessPlatformOpen")}
+                                      </Button>
+                                    </div>
+                                  );
+                                });
+                            })()}
+                          </div>
                         </div>
-                      </div>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -2227,40 +2628,66 @@ export default function GamesPage() {
                 </div>
               ) : null}
 
-              <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr),22rem] xl:items-start">
+              <div id="chess-board-area" className="grid gap-5 xl:grid-cols-[minmax(0,1fr),22rem] xl:items-start">
                 <div className="space-y-5">
+                  {chessGameOver ? (
+                    <div className={`rounded-[1.5rem] border px-5 py-4 ${chessGameResult === "checkmate" ? "border-rose-200 bg-rose-50" : "border-slate-200 bg-slate-50"}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className={`text-xs font-semibold uppercase tracking-[0.18em] ${chessGameResult === "checkmate" ? "text-rose-500" : "text-slate-500"}`}>{t("gamesChessBoardGameOver")}</div>
+                          <p className="mt-1 text-sm font-medium text-slate-900">{currentBoardMessage}</p>
+                        </div>
+                        <Button type="button" className="rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 text-white hover:opacity-95" onClick={isPlatformChessActive ? handleResetSharedChessGame : resetChessBoard}>
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          {t("gamesChessBoardReset")}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="rounded-[1.9rem] border border-[#c5a37f] bg-[linear-gradient(145deg,_#98704a_0%,_#b88d62_44%,_#886040_100%)] p-2 shadow-[0_24px_50px_-28px_rgba(64,40,18,0.54),inset_0_1px_0_rgba(255,255,255,0.16)] sm:p-3 md:p-4">
                     <div className="rounded-[1.55rem] bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.16)_0%,_transparent_26%),radial-gradient(circle_at_bottom_right,_rgba(62,32,10,0.16)_0%,_transparent_28%),linear-gradient(180deg,_rgba(255,255,255,0.06)_0%,_rgba(34,20,9,0.08)_100%)] p-1.5 sm:p-2 md:p-2.5">
                       <div className="grid grid-cols-8 overflow-hidden rounded-[1.35rem] border border-[#ceb89f] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_18px_30px_-26px_rgba(60,35,14,0.58)]">
-                        {chessBoard.map((row, rowIndex) =>
-                          row.map((piece, colIndex) => {
-                            const isDarkSquare = (rowIndex + colIndex) % 2 === 1;
-                            const isSelected = selectedBoardSquare && selectedBoardSquare.row === rowIndex && selectedBoardSquare.col === colIndex;
-                            const isLegalMoveSquare = isLegalChessMove(rowIndex, colIndex);
-                            const isLastMoveSquare =
-                              (lastChessMove && lastChessMove.from.row === rowIndex && lastChessMove.from.col === colIndex) ||
-                              (lastChessMove && lastChessMove.to.row === rowIndex && lastChessMove.to.col === colIndex);
+                        {(() => {
+                          const isBoardFlipped = isPlatformChessActive && activeSharedChessPlayerColor === "black";
+                          const kingCheckPos = isKingInCheck(chessBoard, chessTurn) ? findKingPosition(chessBoard, chessTurn) : null;
+                          const displayBoard = isBoardFlipped
+                            ? [...chessBoard].reverse().map((row) => [...row].reverse())
+                            : chessBoard;
+                          return displayBoard.map((row, vRow) =>
+                            row.map((piece, vCol) => {
+                              const actualRow = isBoardFlipped ? (7 - vRow) : vRow;
+                              const actualCol = isBoardFlipped ? (7 - vCol) : vCol;
+                              const isDarkSquare = (actualRow + actualCol) % 2 === 1;
+                              const isSelected = selectedBoardSquare && selectedBoardSquare.row === actualRow && selectedBoardSquare.col === actualCol;
+                              const isLegalMoveSquare = isLegalChessMove(actualRow, actualCol);
+                              const isLastMoveSquare =
+                                (lastChessMove && lastChessMove.from.row === actualRow && lastChessMove.from.col === actualCol) ||
+                                (lastChessMove && lastChessMove.to.row === actualRow && lastChessMove.to.col === actualCol);
+                              const isKingUnderCheck = kingCheckPos && kingCheckPos.row === actualRow && kingCheckPos.col === actualCol;
+                              const rankLabel = isBoardFlipped ? (vRow + 1) : (8 - vRow);
+                              const fileLabel = CHESS_FILES[isBoardFlipped ? (7 - vCol) : vCol];
 
-                            return (
-                              <button
-                                key={`${rowIndex}-${colIndex}`}
-                                type="button"
-                                aria-label={`${toChessSquare(rowIndex, colIndex)} ${piece ? getChessPieceLabel(piece) : ""}`.trim()}
-                                onClick={() => handleChessBoardSquareClick(rowIndex, colIndex)}
-                                disabled={isChessMoveSyncing}
-                                className={`group relative flex aspect-square items-center justify-center overflow-hidden text-[1.25rem] transition-all hover:z-10 hover:brightness-[1.008] active:scale-[0.98] sm:text-[2.2rem] ${isDarkSquare ? "bg-[linear-gradient(135deg,_#b08a62_0%,_#bf9970_52%,_#9f7853_100%)]" : "bg-[linear-gradient(135deg,_#ebdcc4_0%,_#e3d0b4_54%,_#d5bb95_100%)]"} ${isSelected ? "ring-2 ring-inset ring-violet-600/75" : ""} ${isLastMoveSquare ? "shadow-[inset_0_0_0_9999px_rgba(255,221,128,0.07)]" : ""} ${isChessMoveSyncing ? "cursor-wait" : ""}`}
-                              >
-                                {colIndex === 0 ? <span className={`absolute left-1 top-1 text-[9px] font-semibold sm:left-1.5 sm:text-[10px] ${isDarkSquare ? "text-white/55" : "text-[#7d5b39]/65"}`}>{8 - rowIndex}</span> : null}
-                                {rowIndex === 7 ? <span className={`absolute bottom-1 right-1 text-[9px] font-semibold sm:right-1.5 sm:text-[10px] ${isDarkSquare ? "text-white/55" : "text-[#7d5b39]/65"}`}>{CHESS_FILES[colIndex]}</span> : null}
-                                {piece ? (
-                                  <ChessPieceGlyph piece={piece} sizeClassName={piece.type === "pawn" ? "text-[1.3rem] sm:text-[2.95rem]" : "text-[1.1rem] sm:text-[2.6rem]"} />
-                                ) : null}
-                                {isLegalMoveSquare && !piece ? <span className="absolute h-2.5 w-2.5 rounded-full bg-emerald-500/55" /> : null}
-                                {isLegalMoveSquare && piece ? <span className="absolute inset-2.5 rounded-full ring-2 ring-emerald-500/45" /> : null}
-                              </button>
-                            );
-                          })
-                        )}
+                              return (
+                                <button
+                                  key={`${actualRow}-${actualCol}`}
+                                  type="button"
+                                  aria-label={`${toChessSquare(actualRow, actualCol)} ${piece ? getChessPieceLabel(piece) : ""}`.trim()}
+                                  onClick={() => handleChessBoardSquareClick(actualRow, actualCol)}
+                                  disabled={isChessMoveSyncing || chessGameOver}
+                                  className={`group relative flex aspect-square items-center justify-center overflow-hidden text-[1.25rem] transition-all hover:z-10 active:scale-[0.98] sm:text-[2.2rem] ${isDarkSquare ? "bg-[linear-gradient(135deg,_#b08a62_0%,_#bf9970_52%,_#9f7853_100%)]" : "bg-[linear-gradient(135deg,_#ebdcc4_0%,_#e3d0b4_54%,_#d5bb95_100%)]"} ${isSelected ? "ring-2 ring-inset ring-violet-600/75" : ""} ${isLastMoveSquare ? "shadow-[inset_0_0_0_9999px_rgba(255,221,128,0.07)]" : ""} ${isKingUnderCheck ? "shadow-[inset_0_0_0_9999px_rgba(220,38,38,0.32)]" : ""} ${isChessMoveSyncing || chessGameOver ? "cursor-not-allowed" : ""}`}
+                                >
+                                  {vCol === 0 ? <span className={`absolute left-1 top-1 text-[9px] font-semibold sm:left-1.5 sm:text-[10px] ${isDarkSquare ? "text-white/55" : "text-[#7d5b39]/65"}`}>{rankLabel}</span> : null}
+                                  {vRow === 7 ? <span className={`absolute bottom-1 right-1 text-[9px] font-semibold sm:right-1.5 sm:text-[10px] ${isDarkSquare ? "text-white/55" : "text-[#7d5b39]/65"}`}>{fileLabel}</span> : null}
+                                  {piece ? (
+                                    <ChessPieceGlyph piece={piece} sizeClassName={piece.type === "pawn" ? "text-[1.3rem] sm:text-[2.95rem]" : "text-[1.1rem] sm:text-[2.6rem]"} />
+                                  ) : null}
+                                  {isLegalMoveSquare && !piece ? <span className="absolute h-2.5 w-2.5 rounded-full bg-emerald-500/55" /> : null}
+                                  {isLegalMoveSquare && piece ? <span className="absolute inset-2.5 rounded-full ring-2 ring-emerald-500/45" /> : null}
+                                </button>
+                              );
+                            })
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -2411,6 +2838,41 @@ export default function GamesPage() {
                       </form>
                     </div>
                   ) : null}
+                  {["solo", "duel"].includes(chessPlayMode) && !isPlatformChessActive ? (
+                    <div className="rounded-[1.6rem] border border-slate-100 bg-white p-4 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.12)]">
+                      <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500 mb-3">{language === "ht" ? "Montre echèk" : "Horloge d'échecs"}</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          { color: "white", label: language === "ht" ? "Blan (Ou)" : "Blancs (Vous)", timeLeft: whiteTimeLeft },
+                          { color: "black", label: language === "ht" ? "Nwa (IA)" : "Noirs (IA)", timeLeft: blackTimeLeft },
+                        ].map(({ color, label, timeLeft }) => {
+                          const isActive = chessTurn === color && !chessGameOver;
+                          const isUrgent = timeLeft <= 60;
+                          return (
+                            <div key={color} className={`rounded-[1.2rem] border px-3 py-3 text-center transition-all ${
+                              isActive
+                                ? isUrgent
+                                  ? "border-red-300 bg-red-50 shadow-sm"
+                                  : "border-rose-300 bg-rose-50 shadow-sm"
+                                : "border-slate-100 bg-slate-50"
+                            }`}>
+                              <div className={`text-[10px] font-medium uppercase tracking-wide mb-1 ${isActive ? (isUrgent ? "text-red-600" : "text-rose-600") : "text-slate-400"}`}>{label}</div>
+                              <div className={`text-xl font-bold tabular-nums ${
+                                isActive
+                                  ? isUrgent
+                                    ? "animate-pulse text-red-700"
+                                    : "text-rose-800"
+                                  : "text-slate-500"
+                              }`}>
+                                {formatCountdown(timeLeft)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="rounded-2xl bg-[linear-gradient(135deg,_rgba(255,241,242,0.96)_0%,_rgba(255,247,237,0.98)_100%)] px-4 py-4 text-sm text-slate-700 shadow-[0_18px_34px_-30px_rgba(225,29,72,0.18)]">
                     <div className="font-medium text-rose-800">{currentBoardMessage}</div>
                     <div className="mt-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">{t("gamesChessBoardLastMove")}</div>
@@ -2431,11 +2893,39 @@ export default function GamesPage() {
                     <div className="mt-2 text-sm font-semibold text-slate-900">{selectedChessPlayMode.title}</div>
                     <p className="mt-2 text-sm leading-6 text-slate-600">{selectedChessPlayMode.description}</p>
                     <div className="mt-4 flex flex-wrap items-center gap-3">
+                      {!chessGameOver ? (
+                        <>
+                          {chessPlayMode !== "duel" ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className={`rounded-2xl border-amber-200 ${chessIsPaused ? "bg-amber-50 text-amber-700" : "text-slate-700"}`}
+                              onClick={handleChessTogglePause}
+                            >
+                              {chessIsPaused ? t("gamesChessBoardResume") : t("gamesChessBoardPause")}
+                            </Button>
+                          ) : null}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-2xl border-rose-200 text-rose-600 hover:bg-rose-50"
+                            onClick={handleChessAbandon}
+                            disabled={isChessMoveSyncing}
+                          >
+                            {t("gamesChessBoardAbandon")}
+                          </Button>
+                        </>
+                      ) : null}
                       <Button type="button" className="rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 text-white hover:opacity-95" disabled={isPlatformChessActive && isChessMoveSyncing} onClick={isPlatformChessActive ? handleResetSharedChessGame : resetChessBoard}>
                         <RotateCcw className="mr-2 h-4 w-4" />
                         {isPlatformChessActive ? t("gamesChessPlatformReset") : t("gamesChessBoardReset")}
                       </Button>
                     </div>
+                    {chessIsPaused ? (
+                      <div className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm font-medium text-amber-700">
+                        ⏸ Partie en pause — cliquez Reprendre pour continuer.
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
@@ -3122,6 +3612,36 @@ export default function GamesPage() {
           </div>
         </div>
       </section>
+
+      {chessAbandonConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setChessAbandonConfirmOpen(false)} />
+          <div className="relative w-full max-w-sm rounded-[1.75rem] border border-rose-100 bg-white p-6 shadow-[0_32px_64px_-20px_rgba(225,29,72,0.22),0_16px_32px_-16px_rgba(15,23,42,0.18)]">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-2xl">
+              🏳️
+            </div>
+            <h3 className="mt-4 text-lg font-semibold text-slate-900">{t("gamesChessBoardAbandon")}</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{t("gamesChessBoardAbandonConfirm")}</p>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl border-slate-200 text-slate-700 hover:bg-slate-50"
+                onClick={() => setChessAbandonConfirmOpen(false)}
+              >
+                Annuler
+              </Button>
+              <Button
+                type="button"
+                className="rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 text-white hover:opacity-90"
+                onClick={confirmChessAbandon}
+              >
+                {t("gamesChessBoardAbandon")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

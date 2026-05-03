@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
@@ -186,7 +187,7 @@ export default function BoutiqueCartPage() {
                         className="block overflow-hidden rounded-[1.35rem] border border-[#f1dce0] bg-white sm:w-40"
                       >
                         {item.imageUrl ? (
-                          <img src={item.imageUrl} alt={item.title} className="h-40 w-full object-cover sm:h-full" />
+                          <Image src={item.imageUrl} alt={item.title} width={160} height={160} className="h-40 w-full object-cover sm:h-full" />
                         ) : (
                           <div className="flex h-40 w-full items-center justify-center bg-gradient-to-br from-white via-[#fff4f6] to-[#ffe9ed]">
                             <ImageIcon className="h-10 w-10 text-slate-300" />

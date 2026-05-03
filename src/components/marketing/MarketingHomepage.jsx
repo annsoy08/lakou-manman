@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +26,17 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  PlayCircle,
+  Smartphone,
+  Monitor,
 } from "lucide-react";
+
+// ── Vidéos tutoriels ────────────────────────────────────────────────────────
+// Remplace ces IDs par les IDs YouTube de tes vidéos (partie après watch?v=)
+// Ex: https://www.youtube.com/watch?v=XXXXX  →  XXXXX
+const TUTORIAL_VIDEO_MOBILE_ID = "acsG_uY7ULw";
+const TUTORIAL_VIDEO_DESKTOP_ID = "xOI8XIM26lU";
+// ────────────────────────────────────────────────────────────────────────────
 
 const getFeatures = () => [
   {
@@ -486,7 +497,7 @@ export default function MarketingHomepage() {
 
             <div className="grid gap-4 animate-slide-up lg:gap-5">
               <div className="rounded-[2rem] border border-white bg-white p-6 shadow-[0_24px_80px_-46px_rgba(36,50,72,0.2)] ring-1 ring-white/70 lg:p-7">
-                <img src="/logo-lakou-manman.png" alt="Lakou Manman" className="h-24 w-auto sm:h-28" />
+                <Image src="/logo-lakou-manman.png" alt="Lakou Manman" width={112} height={112} className="h-24 w-auto sm:h-28" priority />
                 <h2 className="mt-5 text-2xl font-semibold tracking-tight text-[#243248]">
                   {t("homeHeroCardTitle")}
                 </h2>
@@ -582,6 +593,79 @@ export default function MarketingHomepage() {
           })}
         </div>
       </section>
+
+      {(TUTORIAL_VIDEO_MOBILE_ID || TUTORIAL_VIDEO_DESKTOP_ID) && (
+        <section className="mx-auto max-w-7xl px-4 pb-10 sm:px-6 lg:px-8">
+          <div className="mb-10 text-center">
+            <Badge className="mb-4 rounded-full border border-[#9B2335]/10 bg-[#9B2335]/8 px-4 py-1.5 text-[#7B1A2C]">
+              <PlayCircle className="mr-1.5 h-3 w-3" />
+              {language === "ht" ? "Videyo gid" : "Vidéos guides"}
+            </Badge>
+            <h2 className="font-display text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
+              {language === "ht" ? "Aprann navige sou Lakou Manman" : "Apprenez à naviguer sur Lakou Manman"}
+            </h2>
+            <p className="mx-auto mt-3 max-w-xl text-slate-700">
+              {language === "ht"
+                ? "Gade videyo sa yo pou aprann itilize aplikasyon an fasil."
+                : "Regardez ces vidéos pour apprendre à utiliser l'application facilement."}
+            </p>
+          </div>
+          <div className="grid gap-6 md:grid-cols-2">
+            {TUTORIAL_VIDEO_MOBILE_ID && (
+              <div className="overflow-hidden rounded-[2rem] border border-white/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.96)_0%,_rgba(246,241,248,0.98)_100%)] shadow-[0_20px_60px_-42px_rgba(83,41,86,0.3)]">
+                <div className="flex items-center gap-3 border-b border-[#f0dfe8] px-5 py-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#9B2335]/10">
+                    <Smartphone className="h-5 w-5 text-[#9B2335]" />
+                  </div>
+                  <div>
+                    <div className="font-semibold text-[#7a284d]">
+                      {language === "ht" ? "Vèsyon mobil" : "Version mobile"}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {language === "ht" ? "Pou telefòn ak tablèt" : "Pour téléphone et tablette"}
+                    </div>
+                  </div>
+                </div>
+                <div className="relative aspect-video w-full">
+                  <iframe
+                    src={`https://www.youtube.com/embed/${TUTORIAL_VIDEO_MOBILE_ID}?rel=0&modestbranding=1`}
+                    title={language === "ht" ? "Gid navigasyon mobil" : "Guide navigation mobile"}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                    className="absolute inset-0 h-full w-full"
+                  />
+                </div>
+              </div>
+            )}
+            {TUTORIAL_VIDEO_DESKTOP_ID && (
+              <div className="overflow-hidden rounded-[2rem] border border-white/80 bg-[linear-gradient(180deg,_rgba(255,255,255,0.96)_0%,_rgba(246,241,248,0.98)_100%)] shadow-[0_20px_60px_-42px_rgba(83,41,86,0.3)]">
+                <div className="flex items-center gap-3 border-b border-[#f0dfe8] px-5 py-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#9B2335]/10">
+                    <Monitor className="h-5 w-5 text-[#9B2335]" />
+                  </div>
+                  <div>
+                    <div className="font-semibold text-[#7a284d]">
+                      {language === "ht" ? "Vèsyon òdinatè" : "Version ordinateur"}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {language === "ht" ? "Pou Desktop ak laptop" : "Pour Desktop et laptop"}
+                    </div>
+                  </div>
+                </div>
+                <div className="relative aspect-video w-full">
+                  <iframe
+                    src={`https://www.youtube.com/embed/${TUTORIAL_VIDEO_DESKTOP_ID}?rel=0&modestbranding=1`}
+                    title={language === "ht" ? "Gid navigasyon òdinatè" : "Guide navigation ordinateur"}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                    className="absolute inset-0 h-full w-full"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="mx-auto max-w-7xl px-4 pb-10 sm:px-6 lg:px-8">
         <div className="overflow-hidden rounded-[2.5rem] border border-[#4f395f]/12 bg-[linear-gradient(135deg,_rgba(255,247,251,0.9)_0%,_rgba(245,238,247,0.94)_52%,_rgba(234,240,249,0.95)_100%)] p-8 shadow-[0_28px_90px_-48px_rgba(31,41,55,0.36)] md:p-14">

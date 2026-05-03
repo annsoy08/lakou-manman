@@ -7,19 +7,24 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import {
   deleteDoctorArticle,
   deleteDoctorVideo,
+  getDoctorAppointments,
   getDoctorArticles,
   getDoctorProfileByEditor,
+  getDoctorQuestions,
   getDoctorVideos,
   saveDoctorArticle,
   saveDoctorProfile,
   saveDoctorVideo,
+  updateDoctorAppointment,
 } from "@/lib/firestore";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Save, ShieldCheck, Sparkles, Stethoscope, Trash2, Video } from "lucide-react";
+import { CalendarCheck, ExternalLink, FileText, MessageCircle, Paperclip, Save, ShieldCheck, Sparkles, Stethoscope, Trash2, Upload, Video, X } from "lucide-react";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getFirebaseStorage } from "@/lib/firebase";
 
 const emptyArticleForm = {
   id: "",
@@ -28,6 +33,8 @@ const emptyArticleForm = {
   category: "",
   published: true,
   validated: true,
+  pdfUrl: "",
+  pdfName: "",
 };
 
 const emptyVideoForm = {
@@ -137,7 +144,7 @@ function getDashboardEntry(pathname = "", language = "fr") {
 
 function hasDashboardAccess({ isAdmin = false, canManageDoctorContent = false, role = "" } = {}) {
   const normalizedRole = String(role || "").trim().toLowerCase();
-  return isAdmin || canManageDoctorContent || ["admin", "doctor_editor"].includes(normalizedRole);
+  return isAdmin || canManageDoctorContent || ["admin", "doctor_editor", "doctor"].includes(normalizedRole);
 }
 
 const DASHBOARD_BOOTSTRAP_TIMEOUT_MS = 15000;
@@ -218,6 +225,32 @@ export function DoctorDashboardPage() {
         validatedArticle: "Kontni verifye",
         saveArticle: "Anrejistre atik la",
         createArticle: "Nouvo atik",
+        articlePdf: "Fichè PDF (opsyonèl)",
+        articlePdfRemove: "Retire PDF a",
+        articlePdfOpen: "Ouvri PDF a",
+        articlePdfUploading: "Ap voye PDF a...",
+        articlePdfBadge: "PDF",
+        questionsTitle: "Kesyon resevwa",
+        questionsDesc: "Kesyon pasyan yo voye atravè fòmilè kontak la.",
+        noQuestions: "Pa gen kesyon pou kounye a.",
+        questionFrom: "De",
+        appointmentsTitle: "Randevou vityèl",
+        appointmentsDesc: "Demann randevou pasyan yo voye pou konsiltasyon vityèl.",
+        noAppointments: "Pa gen demann randevou pou kounye a.",
+        appointmentFrom: "Pasyan",
+        appointmentDate: "Dat",
+        appointmentTime: "Lè",
+        appointmentMotif: "Rezon",
+        appointmentStatus: "Estati",
+        appointmentPending: "An atant",
+        appointmentConfirmed: "Konfime",
+        appointmentRejected: "Refize",
+        appointmentConfirm: "Konfime & Jenere lyen Jitsi",
+        appointmentReject: "Refize",
+        appointmentMeeting: "Ouvri konsiltasyon an",
+        appointmentConfirming: "Ap konfime...",
+        appointmentJoin: "Antre nan konsiltasyon",
+        appointmentClose: "Fèmen konsiltasyon an",
         managedArticles: "Atik medikal yo",
         myArticles: "Atik mwen yo",
         noManagedArticles: "Pa gen atik medikal disponib pou kounye a.",
@@ -288,6 +321,32 @@ export function DoctorDashboardPage() {
         validatedArticle: "Contenu validé",
         saveArticle: "Enregistrer l'article",
         createArticle: "Nouvel article",
+        articlePdf: "Fichier PDF (optionnel)",
+        articlePdfRemove: "Supprimer le PDF",
+        articlePdfOpen: "Ouvrir le PDF",
+        articlePdfUploading: "Téléversement du PDF en cours...",
+        articlePdfBadge: "PDF",
+        questionsTitle: "Questions reçues",
+        questionsDesc: "Questions envoyées par les patients via le formulaire de contact.",
+        noQuestions: "Aucune question reçue pour le moment.",
+        questionFrom: "De",
+        appointmentsTitle: "Rendez-vous virtuels",
+        appointmentsDesc: "Demandes de consultation virtuelle envoyées par les patients.",
+        noAppointments: "Aucune demande de rendez-vous pour le moment.",
+        appointmentFrom: "Patient",
+        appointmentDate: "Date",
+        appointmentTime: "Heure",
+        appointmentMotif: "Motif",
+        appointmentStatus: "Statut",
+        appointmentPending: "En attente",
+        appointmentConfirmed: "Confirmé",
+        appointmentRejected: "Refusé",
+        appointmentConfirm: "Confirmer & Générer lien Jitsi",
+        appointmentReject: "Refuser",
+        appointmentMeeting: "Ouvrir la consultation",
+        appointmentConfirming: "Confirmation...",
+        appointmentJoin: "Rejoindre la consultation",
+        appointmentClose: "Fermer la consultation",
         managedArticles: "Articles médicaux",
         myArticles: "Mes articles",
         noManagedArticles: "Aucun article médical n'est disponible pour le moment.",
@@ -325,9 +384,16 @@ export function DoctorDashboardPage() {
   const [videoForm, setVideoForm] = useState(emptyVideoForm);
   const [articles, setArticles] = useState([]);
   const [videos, setVideos] = useState([]);
+  const [questions, setQuestions] = useState([]);
+  const [appointments, setAppointments] = useState([]);
+  const [appointmentActionId, setAppointmentActionId] = useState("");
+  const [activeJitsiUrl, setActiveJitsiUrl] = useState("");
   const [resolvedRole, setResolvedRole] = useState(currentRole);
   const [profileSaving, setProfileSaving] = useState(false);
   const [articleSaving, setArticleSaving] = useState(false);
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfUploading, setPdfUploading] = useState(false);
+  const pdfInputRef = useRef(null);
   const [videoSaving, setVideoSaving] = useState(false);
   const [articleDeletingId, setArticleDeletingId] = useState("");
   const [videoDeletingId, setVideoDeletingId] = useState("");
@@ -395,7 +461,15 @@ export function DoctorDashboardPage() {
           setResolvedRole(effectiveRole);
         }
 
-        if (!hasAccess) {
+        const doctorDisplayName = String(refreshedProfile?.name || userProfile?.name || user?.displayName || "").trim();
+
+        let resolvedAccess = hasAccess;
+        if (!resolvedAccess) {
+          const linkedProfile = await getDoctorProfileByEditor(userId, doctorDisplayName).catch(() => null);
+          resolvedAccess = Boolean(linkedProfile?.id);
+        }
+
+        if (!resolvedAccess) {
           if (!cancelled) {
             setFeedback({ tone: "error", message: dashboardUi.accessDenied });
           }
@@ -408,11 +482,13 @@ export function DoctorDashboardPage() {
 
         const adminCanLoadAllArticles = isAdmin || effectiveRole === "admin";
 
-        const [doctorProfile, ownArticles, ownVideos] = await withTimeout(
+        const [doctorProfile, ownArticles, ownVideos, ownQuestions, ownAppointments] = await withTimeout(
           Promise.all([
-            getDoctorProfileByEditor(userId),
+            getDoctorProfileByEditor(userId, doctorDisplayName),
             getDoctorArticles(adminCanLoadAllArticles ? {} : { authorId: userId }),
             getDoctorVideos({ authorId: userId }),
+            getDoctorQuestions(),
+            getDoctorAppointments({ doctorId: userId }),
           ]),
           DASHBOARD_BOOTSTRAP_TIMEOUT_MS,
           "dashboard_fetch_data_timeout"
@@ -422,6 +498,8 @@ export function DoctorDashboardPage() {
           setProfileForm(buildProfileForm(doctorProfile || {}, refreshedProfile || userProfile, user, dashboardEntry.defaultSpecialty));
           setArticles(ownArticles);
           setVideos(ownVideos);
+          setQuestions(Array.isArray(ownQuestions) ? ownQuestions : []);
+          setAppointments(Array.isArray(ownAppointments) ? ownAppointments : []);
         }
       } catch (error) {
         console.error("Error loading doctor dashboard:", error);
@@ -462,7 +540,8 @@ export function DoctorDashboardPage() {
         email: userProfile?.email || user.email || "",
         photo: userProfile?.photo || user.photoURL || "",
       }, user.uid);
-      const savedProfile = await getDoctorProfileByEditor(user.uid);
+      const savedProfileDisplayName = String(profileForm.displayName || userProfile?.name || user?.displayName || "").trim();
+      const savedProfile = await getDoctorProfileByEditor(user.uid, savedProfileDisplayName);
       const nextProfile = savedProfile || profileForm;
 
       setProfileForm(buildProfileForm(nextProfile, userProfile, user, dashboardEntry.defaultSpecialty));
@@ -478,6 +557,13 @@ export function DoctorDashboardPage() {
     }
   }
 
+  function handlePdfSelect(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setPdfFile(file);
+    setArticleForm((prev) => ({ ...prev, pdfUrl: "", pdfName: "" }));
+  }
+
   async function handleSaveArticle() {
     if (!user?.uid) {
       return;
@@ -486,9 +572,27 @@ export function DoctorDashboardPage() {
     setArticleSaving(true);
     setFeedback({ tone: "success", message: "" });
 
+    let nextPdfUrl = articleForm.pdfUrl;
+    let nextPdfName = articleForm.pdfName;
+
     try {
+      if (pdfFile) {
+        setPdfUploading(true);
+        setFeedback({ tone: "success", message: dashboardUi.articlePdfUploading });
+        const storage = getFirebaseStorage();
+        const filename = `${Date.now()}-${pdfFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        const storageRef = ref(storage, `doctor_articles_pdfs/${user.uid}/${filename}`);
+        await uploadBytes(storageRef, pdfFile);
+        nextPdfUrl = await getDownloadURL(storageRef);
+        nextPdfName = pdfFile.name;
+        setPdfUploading(false);
+        setFeedback({ tone: "success", message: "" });
+      }
+
       await saveDoctorArticle({
         ...articleForm,
+        pdfUrl: nextPdfUrl,
+        pdfName: nextPdfName,
         authorId: user.uid,
         authorName: profileForm.displayName || userProfile?.name || user.displayName || "",
         authorSpecialty: profileForm.specialty,
@@ -496,12 +600,15 @@ export function DoctorDashboardPage() {
       const ownArticles = await getDoctorArticles(articleQueryOptions);
       setArticles(ownArticles);
       setArticleForm(emptyArticleForm);
+      setPdfFile(null);
       setFeedback({ tone: "success", message: dashboardUi.articleSaved });
     } catch (error) {
       console.error("Error saving doctor article:", error);
+      setPdfUploading(false);
       setFeedback({ tone: "error", message: String(error?.message || "save_error") });
     } finally {
       setArticleSaving(false);
+      setPdfUploading(false);
     }
   }
 
@@ -592,6 +699,60 @@ export function DoctorDashboardPage() {
     }
   }
 
+  async function handleConfirmAppointment(appointmentId) {
+    if (!appointmentId) {
+      return;
+    }
+
+    setAppointmentActionId(appointmentId);
+
+    try {
+      const meetingId = `lakou-manman-${appointmentId}`;
+      const meetingUrl = `https://meet.jit.si/${meetingId}`;
+      await updateDoctorAppointment(appointmentId, {
+        status: "confirmed",
+        meetingUrl,
+        confirmedAt: new Date().toISOString(),
+      });
+      setAppointments((prev) => prev.map((appt) =>
+        appt.id === appointmentId
+          ? { ...appt, status: "confirmed", meetingUrl, confirmedAt: new Date().toISOString() }
+          : appt
+      ));
+      setFeedback({ tone: "success", message: dashboardUi.appointmentConfirmed + " — Jitsi: " + meetingUrl });
+    } catch (error) {
+      console.error("Error confirming appointment:", error);
+      setFeedback({ tone: "error", message: String(error?.message || "confirm_error") });
+    } finally {
+      setAppointmentActionId("");
+    }
+  }
+
+  async function handleRejectAppointment(appointmentId) {
+    if (!appointmentId) {
+      return;
+    }
+
+    setAppointmentActionId(appointmentId);
+
+    try {
+      await updateDoctorAppointment(appointmentId, {
+        status: "rejected",
+        rejectedAt: new Date().toISOString(),
+      });
+      setAppointments((prev) => prev.map((appt) =>
+        appt.id === appointmentId
+          ? { ...appt, status: "rejected" }
+          : appt
+      ));
+    } catch (error) {
+      console.error("Error rejecting appointment:", error);
+      setFeedback({ tone: "error", message: String(error?.message || "reject_error") });
+    } finally {
+      setAppointmentActionId("");
+    }
+  }
+
   if (pageLoading) {
     return <div className="py-16 text-center text-slate-500">{dashboardUi.loading}</div>;
   }
@@ -613,6 +774,45 @@ export function DoctorDashboardPage() {
 
   return (
     <div className="space-y-6">
+      {activeJitsiUrl ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-black">
+          <div className="flex shrink-0 items-center justify-between gap-3 bg-slate-900 px-4 py-3">
+            <div className="flex items-center gap-2 text-white">
+              <Video className="h-4 w-4 text-indigo-400" />
+              <span className="text-sm font-medium">{dashboardUi.appointmentsTitle}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={activeJitsiUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-500 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                {language === "ht" ? "Nouvo tab" : "Nouvel onglet"}
+              </a>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="rounded-xl border-slate-600 text-white hover:bg-slate-700 hover:text-white"
+                onClick={() => setActiveJitsiUrl("")}
+              >
+                <X className="mr-1.5 h-3.5 w-3.5" />
+                {dashboardUi.appointmentClose}
+              </Button>
+            </div>
+          </div>
+          <iframe
+            src={activeJitsiUrl}
+            allow="camera; microphone; fullscreen; display-capture; autoplay"
+            allowFullScreen
+            className="flex-1 w-full border-0"
+            title="Consultation virtuelle Jitsi"
+          />
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-4 rounded-[2rem] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-teal-50 p-6 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-start gap-4">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-200">
@@ -647,7 +847,21 @@ export function DoctorDashboardPage() {
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <Input value={profileForm.displayName} onChange={(event) => setProfileForm((prev) => ({ ...prev, displayName: event.target.value }))} placeholder={dashboardUi.name} className="rounded-xl" />
-              <Input value={profileForm.specialty} onChange={(event) => setProfileForm((prev) => ({ ...prev, specialty: event.target.value }))} placeholder={dashboardUi.specialty} className="rounded-xl" />
+              <select
+                value={profileForm.specialty}
+                onChange={(event) => setProfileForm((prev) => ({ ...prev, specialty: event.target.value }))}
+                className="flex h-10 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="">{dashboardUi.specialty}</option>
+                <option value="Pédiatrie">Pédiatrie</option>
+                <option value="Gynécologie et obstétrique">Gynécologie et obstétrique</option>
+                <option value="Psychologie et soutien émotionnel">Psychologie et soutien émotionnel</option>
+                <option value="Médecine générale">Médecine générale</option>
+                <option value="Sage-femme">Sage-femme</option>
+                <option value="Nutrition">Nutrition</option>
+                <option value="Dermatologie">Dermatologie</option>
+                <option value="Autre">Autre</option>
+              </select>
               <Input value={profileForm.headline} onChange={(event) => setProfileForm((prev) => ({ ...prev, headline: event.target.value }))} placeholder={dashboardUi.headline} className="rounded-xl md:col-span-2" />
               <Input value={profileForm.city} onChange={(event) => setProfileForm((prev) => ({ ...prev, city: event.target.value }))} placeholder={dashboardUi.city} className="rounded-xl" />
               <Input value={profileForm.country} onChange={(event) => setProfileForm((prev) => ({ ...prev, country: event.target.value }))} placeholder={dashboardUi.country} className="rounded-xl" />
@@ -689,7 +903,44 @@ export function DoctorDashboardPage() {
           <CardContent className="space-y-4">
             <Input value={articleForm.title} onChange={(event) => setArticleForm((prev) => ({ ...prev, title: event.target.value }))} placeholder={dashboardUi.articleTitle} className="rounded-xl" />
             <Input value={articleForm.category} onChange={(event) => setArticleForm((prev) => ({ ...prev, category: event.target.value }))} placeholder={dashboardUi.articleCategory} className="rounded-xl" />
-            <Textarea value={articleForm.text} onChange={(event) => setArticleForm((prev) => ({ ...prev, text: event.target.value }))} placeholder={dashboardUi.articleBody} className="min-h-[220px] rounded-xl" />
+            <Textarea value={articleForm.text} onChange={(event) => setArticleForm((prev) => ({ ...prev, text: event.target.value }))} placeholder={dashboardUi.articleBody} className="min-h-[160px] rounded-xl" />
+            <div className="space-y-2 rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+              <div className="text-xs font-medium text-slate-500">{dashboardUi.articlePdf}</div>
+              {articleForm.pdfUrl ? (
+                <div className="flex items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2">
+                  <FileText className="h-4 w-4 shrink-0 text-emerald-600" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{articleForm.pdfName || "Document PDF"}</span>
+                  <a href={articleForm.pdfUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline">
+                    <ExternalLink className="h-3 w-3" />{dashboardUi.articlePdfOpen}
+                  </a>
+                  <button type="button" onClick={() => setArticleForm((prev) => ({ ...prev, pdfUrl: "", pdfName: "" }))} className="ml-1 text-slate-400 hover:text-rose-500">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : pdfFile ? (
+                <div className="flex items-center gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2">
+                  <Paperclip className="h-4 w-4 shrink-0 text-sky-600" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{pdfFile.name}</span>
+                  <button type="button" onClick={() => { setPdfFile(null); if (pdfInputRef.current) pdfInputRef.current.value = ""; }} className="text-slate-400 hover:text-rose-500">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : null}
+              {!articleForm.pdfUrl && (
+                <div>
+                  <input
+                    ref={pdfInputRef}
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    className="hidden"
+                    onChange={handlePdfSelect}
+                  />
+                  <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => pdfInputRef.current?.click()}>
+                    <Upload className="mr-2 h-3.5 w-3.5" />{dashboardUi.articlePdf}
+                  </Button>
+                </div>
+              )}
+            </div>
             <div className="flex flex-wrap items-center gap-3">
               <Button type="button" variant={articleForm.published ? "default" : "outline"} className="rounded-full" onClick={() => setArticleForm((prev) => ({ ...prev, published: !prev.published }))}>
                 {dashboardUi.publishArticle}
@@ -713,7 +964,7 @@ export function DoctorDashboardPage() {
                 </Button>
               ) : null}
             </div>
-            <Button type="button" className="rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600" onClick={handleSaveArticle} disabled={articleSaving || !articleForm.title.trim() || !articleForm.text.trim()}>
+            <Button type="button" className="rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600" onClick={handleSaveArticle} disabled={articleSaving || pdfUploading || !articleForm.title.trim() || (!articleForm.text.trim() && !articleForm.pdfUrl && !pdfFile)}>
               <Save className="mr-2 h-4 w-4" /> {articleSaving ? dashboardUi.saveArticle + "..." : dashboardUi.saveArticle}
             </Button>
           </CardContent>
@@ -747,6 +998,11 @@ export function DoctorDashboardPage() {
                       ) : null}
                     </div>
                     <p className="text-sm leading-6 text-slate-600">{article.text || article.body}</p>
+                    {article.pdfUrl ? (
+                      <a href={article.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100">
+                        <FileText className="h-3 w-3" />{dashboardUi.articlePdfBadge} — {article.pdfName || dashboardUi.articlePdfOpen}
+                      </a>
+                    ) : null}
                     {article.authorName || article.authorSpecialty ? (
                       <div className="text-xs text-slate-500">
                         {dashboardUi.createdBy} {article.authorName || article.authorSpecialty || "-"}
@@ -756,14 +1012,16 @@ export function DoctorDashboardPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {canEditArticle ? (
-                      <Button type="button" variant="outline" className="rounded-xl" onClick={() => setArticleForm({
+                      <Button type="button" variant="outline" className="rounded-xl" onClick={() => { setPdfFile(null); setArticleForm({
                         id: article.id,
                         title: article.title || "",
                         text: article.text || article.body || "",
                         category: article.category || "",
                         published: article.published !== false,
                         validated: article.validated !== false,
-                      })}>
+                        pdfUrl: article.pdfUrl || "",
+                        pdfName: article.pdfName || "",
+                      }); }}>
                         {dashboardUi.edit}
                       </Button>
                     ) : null}
@@ -870,6 +1128,117 @@ export function DoctorDashboardPage() {
               </div>
             </div>
           ))}
+        </CardContent>
+      </Card>
+      <Card className="rounded-[2rem] border-0 shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <MessageCircle className="h-4 w-4 text-emerald-600" /> {dashboardUi.questionsTitle}
+          </CardTitle>
+          <CardDescription>{dashboardUi.questionsDesc}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {questions.length === 0 ? (
+            <p className="text-sm text-slate-500">{dashboardUi.noQuestions}</p>
+          ) : questions.map((q) => (
+            <div key={q.id} className="rounded-[1.5rem] border border-slate-100 bg-slate-50/80 p-4 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium text-slate-900">{q.title || "—"}</span>
+                {q.createdAt?.toDate ? (
+                  <span className="text-xs text-slate-400">{q.createdAt.toDate().toLocaleDateString()}</span>
+                ) : null}
+              </div>
+              <p className="text-sm leading-6 text-slate-700">{q.question || q.body || "—"}</p>
+              {q.authorName ? (
+                <div className="text-xs text-slate-400">{dashboardUi.questionFrom} : {q.authorName}</div>
+              ) : null}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-[2rem] border-0 shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <CalendarCheck className="h-4 w-4 text-indigo-600" /> {dashboardUi.appointmentsTitle}
+          </CardTitle>
+          <CardDescription>{dashboardUi.appointmentsDesc}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {appointments.length === 0 ? (
+            <p className="text-sm text-slate-500">{dashboardUi.noAppointments}</p>
+          ) : appointments.map((appt) => {
+            const isPending = appt.status === "pending";
+            const isConfirmed = appt.status === "confirmed";
+            const isActing = appointmentActionId === appt.id;
+            const statusBadgeClass = isPending
+              ? "inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700"
+              : isConfirmed
+                ? "inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700"
+                : "inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-500";
+            const statusLabel = isPending
+              ? dashboardUi.appointmentPending
+              : isConfirmed
+                ? dashboardUi.appointmentConfirmed
+                : dashboardUi.appointmentRejected;
+
+            return (
+              <div key={appt.id} className="rounded-[1.5rem] border border-slate-100 bg-slate-50/80 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-slate-900">{appt.patientName || "—"}</span>
+                    <span className={statusBadgeClass}>{statusLabel}</span>
+                  </div>
+                  {appt.createdAt?.toDate ? (
+                    <span className="text-xs text-slate-400">{appt.createdAt.toDate().toLocaleDateString()}</span>
+                  ) : null}
+                </div>
+                <div className="grid gap-1 text-sm text-slate-600">
+                  {appt.preferredDate ? (
+                    <div><span className="font-medium text-slate-700">{dashboardUi.appointmentDate} :</span> {appt.preferredDate}{appt.preferredTime ? ` — ${appt.preferredTime}` : ""}</div>
+                  ) : null}
+                  {appt.motif ? (
+                    <div><span className="font-medium text-slate-700">{dashboardUi.appointmentMotif} :</span> {appt.motif}</div>
+                  ) : null}
+                </div>
+                {isConfirmed && appt.meetingUrl ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-sm"
+                    onClick={() => setActiveJitsiUrl(appt.meetingUrl)}
+                  >
+                    <Video className="mr-1.5 h-3.5 w-3.5" />
+                    {dashboardUi.appointmentJoin}
+                  </Button>
+                ) : null}
+                {isPending ? (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-sm"
+                      onClick={() => handleConfirmAppointment(appt.id)}
+                      disabled={isActing}
+                    >
+                      <CalendarCheck className="mr-1.5 h-3.5 w-3.5" />
+                      {isActing ? dashboardUi.appointmentConfirming : dashboardUi.appointmentConfirm}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="rounded-xl border-rose-200 text-rose-600 hover:bg-rose-50"
+                      onClick={() => handleRejectAppointment(appt.id)}
+                      disabled={isActing}
+                    >
+                      {dashboardUi.appointmentReject}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </CardContent>
       </Card>
     </div>

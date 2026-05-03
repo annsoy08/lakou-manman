@@ -12,14 +12,17 @@ import {
 import Navbar from "@/components/layout/Navbar";
 import PromoBanner from "@/components/layout/PromoBanner";
 import NotificationsWrapper from "@/components/layout/NotificationsWrapper";
+import GlobalCallBanner from "@/components/layout/GlobalCallBanner";
 import WelcomeBanner from "@/components/layout/WelcomeBanner";
 import Footer from "@/components/layout/Footer";
 import MarketingHeader from "@/components/layout/MarketingHeader";
 import LanguageSelector from "@/components/ui/LanguageSelector";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { updateUserPresence } from "@/lib/firestore";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
+import PushNotificationSetup from "@/components/layout/PushNotificationSetup";
 
 export default function AppShell({ children }) {
   const pathname = usePathname();
@@ -55,6 +58,18 @@ export default function AppShell({ children }) {
       router.replace(redirectTarget);
     }
   }, [pathname, redirectTarget, router]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    updateUserPresence(user.uid, { isOnline: true }).catch(() => {});
+    const intervalId = setInterval(() => {
+      updateUserPresence(user.uid, { isOnline: true }).catch(() => {});
+    }, 45000);
+    return () => {
+      clearInterval(intervalId);
+      updateUserPresence(user.uid, { isOnline: false }).catch(() => {});
+    };
+  }, [user?.uid]);
 
   if (isAuthRoute) {
     return (
@@ -108,6 +123,9 @@ export default function AppShell({ children }) {
   return (
     <>
       <AppErrorBoundary fallback={null}>
+        <PushNotificationSetup />
+      </AppErrorBoundary>
+      <AppErrorBoundary fallback={null}>
         <WelcomeBanner />
       </AppErrorBoundary>
       <AppErrorBoundary fallback={null}>
@@ -132,6 +150,9 @@ export default function AppShell({ children }) {
         )}
         {children}
       </main>
+      <AppErrorBoundary fallback={null}>
+        <GlobalCallBanner />
+      </AppErrorBoundary>
       <AppErrorBoundary fallback={null}>
         <NotificationsWrapper />
       </AppErrorBoundary>

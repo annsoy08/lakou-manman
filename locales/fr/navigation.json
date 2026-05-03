@@ -14,5 +14,7 @@
   "register": "S'inscrire",
   "logout": "Se déconnecter",
   "admin": "Administration",
-  "settings": "Paramètres"
+  "settings": "Paramètres",
+  "evenements": "Événements",
+  "concours": "Concours"
 }

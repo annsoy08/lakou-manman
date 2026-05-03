@@ -20,6 +20,8 @@
 # Firebase admin credentials - never commit
 scripts/serviceAccount.json
 scripts/serviceAccount.json.json
+*firebase-adminsdk*.json
+*-adminsdk-*.json
 
 # debug
 npm-debug.log*

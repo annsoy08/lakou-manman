@@ -45,6 +45,8 @@ import {
   RefreshCw,
   ShoppingBag,
   LayoutGrid,
+  CalendarHeart,
+  Trophy,
 } from "lucide-react";
 
 const ADMIN_ACCESS_TIMEOUT_MS = 12000;
@@ -98,6 +100,7 @@ export default function AdminPage() {
   const [resolutionDraft, setResolutionDraft] = useState({ kind: "", reportId: "", resolution: "reviewed", note: "" });
   const [doctorProfileAssignments, setDoctorProfileAssignments] = useState({});
   const [doctorProfileFeedback, setDoctorProfileFeedback] = useState({ tone: "success", message: "" });
+  const [roleFeedback, setRoleFeedback] = useState({ tone: "success", message: "" });
   const [adminSection, setAdminSection] = useState("finances");
   const [activeAdminTab, setActiveAdminTab] = useState("shopOrders");
   const shopProductsLabel = language === "ht" ? "Pwodwi boutik" : "Produits boutique";
@@ -159,6 +162,9 @@ export default function AdminPage() {
   const doctorEditorLabel = language === "ht" ? "Editè medsen" : "Doctor editor";
   const grantDoctorEditorLabel = language === "ht" ? "Bay aksè medsen" : "Donner accès médecin";
   const removeDoctorEditorLabel = language === "ht" ? "Retire aksè medsen" : "Retirer accès médecin";
+  const doctorRoleLabel = language === "ht" ? "Medsen" : "Médecin";
+  const grantDoctorRoleLabel = language === "ht" ? "Bay wòl medsen" : "Rôle médecin";
+  const removeDoctorRoleLabel = language === "ht" ? "Retire wòl medsen" : "Retirer rôle médecin";
   const doctorProfilesLabel = language === "ht" ? "Pwofil medsen" : "Profils médecins";
   const noDoctorProfilesLabel = language === "ht" ? "Pa gen pwofil medsen pou kounye a." : "Aucun profil médecin pour le moment.";
   const linkDoctorProfileLabel = language === "ht" ? "Lye pwofil la" : "Lier le profil";
@@ -593,6 +599,31 @@ export default function AdminPage() {
     }
   }
 
+  async function handleToggleDoctorRole(targetUser) {
+    if (!targetUser?.id || targetUser.id === user?.uid || String(targetUser.role || "").trim().toLowerCase() === "admin") {
+      return;
+    }
+
+    const nextRole = String(targetUser.role || "").trim().toLowerCase() === "doctor"
+      ? "user"
+      : "doctor";
+    const actionKey = `user:${targetUser.id}:doctor-role`;
+    setActionLoading(actionKey);
+    setRoleFeedback({ tone: "success", message: "" });
+
+    try {
+      await updateUserProfile(targetUser.id, { role: nextRole });
+      await refreshAdminData();
+      const label = language === "ht" ? "W\u00f2l medsen mete aj\u00f2." : `R\u00f4le m\u00e9decin ${nextRole === "doctor" ? "attribu\u00e9" : "retir\u00e9"} avec succ\u00e8s.`;
+      setRoleFeedback({ tone: "success", message: label });
+    } catch (error) {
+      console.error("Doctor role update error:", error);
+      setRoleFeedback({ tone: "error", message: String(error?.message || "Erreur lors de la mise \u00e0 jour du r\u00f4le.") });
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   async function handleAssignDoctorProfile(profile) {
     const targetUserId = String(doctorProfileAssignments[profile?.id] || "").trim();
 
@@ -782,6 +813,49 @@ export default function AdminPage() {
           {loadError}
         </div>
       ) : null}
+
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <a href="/admin/evenements-bookings"
+          className="flex flex-1 items-center justify-between gap-4 rounded-[2rem] border border-fuchsia-200 bg-gradient-to-r from-rose-50 to-fuchsia-50 p-5 shadow-sm hover:shadow-md transition">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-500 to-fuchsia-500">
+              <CalendarHeart className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <p className="font-extrabold text-rose-900">Demandes événementielles</p>
+              <p className="text-sm text-slate-500">Voir, répondre et gérer toutes les demandes de devis</p>
+            </div>
+          </div>
+          <span className="rounded-2xl bg-fuchsia-600 px-3 py-1 text-xs font-bold text-white">Ouvrir →</span>
+        </a>
+        <a href="/admin/event-partners"
+          className="flex flex-1 items-center justify-between gap-4 rounded-[2rem] border border-rose-100 bg-gradient-to-r from-pink-50 to-rose-50 p-5 shadow-sm hover:shadow-md transition">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-pink-400 to-rose-500">
+              <CalendarHeart className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <p className="font-extrabold text-rose-900">Partenaires événements</p>
+              <p className="text-sm text-slate-500">Ajouter, modifier ou désactiver les partenaires</p>
+            </div>
+          </div>
+          <span className="rounded-2xl bg-rose-600 px-3 py-1 text-xs font-bold text-white">Gérer →</span>
+        </a>
+      </div>
+
+      <a href="/admin/concours"
+        className="flex items-center justify-between gap-4 rounded-[2rem] border border-amber-100 bg-gradient-to-r from-amber-50 to-rose-50 p-5 shadow-sm hover:shadow-md transition">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-rose-500">
+            <Trophy className="h-6 w-6 text-white" />
+          </div>
+          <div>
+            <p className="font-extrabold text-rose-900">Concours</p>
+            <p className="text-sm text-slate-500">Créer et gérer les concours en 3 phases</p>
+          </div>
+        </div>
+        <span className="rounded-2xl bg-amber-500 px-3 py-1 text-xs font-bold text-white">Gérer →</span>
+      </a>
 
       <div className="flex flex-col gap-4 rounded-[2rem] border border-slate-200 bg-white/70 p-5 shadow-sm lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-3">
@@ -1209,6 +1283,11 @@ export default function AdminPage() {
 
         {/* Users */}
         <TabsContent value="users" className="space-y-4">
+          {roleFeedback.message ? (
+            <div className={roleFeedback.tone === "error" ? "rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700" : "rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"}>
+              {roleFeedback.message}
+            </div>
+          ) : null}
           <Card className="rounded-[2rem]">
             <CardHeader>
               <CardTitle className="text-lg">{t("userList")} ({users.length})</CardTitle>
@@ -1221,11 +1300,13 @@ export default function AdminPage() {
                   const reportCount = userReportCountByUserId[u.id] || 0;
                   const moderationDisabled = u.id === user?.uid || String(u.role || "").trim().toLowerCase() === "admin";
                   const isDoctorEditor = String(u.role || "").trim().toLowerCase() === "doctor_editor";
+                  const isDoctorRole = String(u.role || "").trim().toLowerCase() === "doctor";
                   const isMessageToggleLoading = actionLoading === `user:${u.id}:messages`;
                   const isProfileToggleLoading = actionLoading === `user:${u.id}:profile`;
                   const isReviewLoading = actionLoading === `user:${u.id}:review`;
                   const isSuspendLoading = actionLoading === `user:${u.id}:suspend`;
                   const isRoleToggleLoading = actionLoading === `user:${u.id}:role`;
+                  const isDoctorRoleLoading = actionLoading === `user:${u.id}:doctor-role`;
 
                   return (
                     <div key={u.id} className="flex flex-col gap-3 py-4 md:flex-row md:items-start md:justify-between">
@@ -1237,6 +1318,9 @@ export default function AdminPage() {
                           )}
                           {isDoctorEditor && (
                             <Badge className="rounded-full bg-sky-100 text-sky-700">{doctorEditorLabel}</Badge>
+                          )}
+                          {isDoctorRole && (
+                            <Badge className="rounded-full bg-emerald-100 text-emerald-700">{doctorRoleLabel}</Badge>
                           )}
                           <Badge className={`rounded-full ${statusMeta.className}`}>{statusMeta.label}</Badge>
                           {u.messagingRestricted && (
@@ -1261,10 +1345,10 @@ export default function AdminPage() {
                           size="sm"
                           variant="outline"
                           className="rounded-xl"
-                          onClick={() => handleToggleDoctorEditorRole(u)}
-                          disabled={moderationDisabled || isRoleToggleLoading}
+                          onClick={() => handleToggleDoctorRole(u)}
+                          disabled={moderationDisabled || isDoctorRoleLoading}
                         >
-                          {isDoctorEditor ? removeDoctorEditorLabel : grantDoctorEditorLabel}
+                          {isDoctorRole ? removeDoctorRoleLabel : grantDoctorRoleLabel}
                         </Button>
                         <Button
                           size="sm"

@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { getUserVaccinationProfile, saveUserVaccinationProfile } from "@/lib/firestore";
-import CommunitySupportToolPanel from "@/components/health-tools/CommunitySupportTool";
 import DevelopmentMilestonesTool from "@/components/health-tools/DevelopmentMilestonesTool";
 import NutritionGuideTool from "@/components/health-tools/NutritionGuideTool";
 import PregnancyCalculatorTool from "@/components/health-tools/PregnancyCalculatorTool";
@@ -478,14 +477,6 @@ export default function ToolsPage() {
       color: "from-purple-500 to-blue-500",
       category: "development"
     },
-    {
-      id: "community",
-      title: t("communitySupport") || "Soutien communautaire",
-      description: t("communitySupportDesc") || "Connectez-vous avec d'autres mamans pour du soutien",
-      icon: Users,
-      color: "from-indigo-500 to-purple-500",
-      category: "community"
-    }
   ];
 
   // Pregnancy Calculator Tool
@@ -1064,7 +1055,7 @@ export default function ToolsPage() {
         ? (language === "ht" ? "Ap sove sou kont ou..." : "Sauvegarde sur votre compte...")
         : vaccinationSyncState === "error"
           ? (language === "ht" ? "Erè pandan senkronizasyon an. Done yo rete sou aparèy sa a." : "Erreur de synchronisation. Les données restent sur cet appareil.")
-          : (language === "ht" ? "Konekte ak kont ou, dosye vaksen an sove sou Firestore." : "Connecté à votre compte, le carnet vaccinal est sauvegardé sur Firestore.")
+          : (language === "ht" ? "Konekte ak kont ou, dosye vaksen an sove sou espas pèsonèl ou." : "Connecté à votre compte, le carnet vaccinal est sauvegardé sur votre espace personnel.")
       : (language === "ht" ? "Konekte pou sove dosye vaksen an sou kont ou. Pou kounye a li sove sou aparèy sa a." : "Connectez-vous pour sauvegarder le carnet vaccinal sur votre compte. Pour l'instant, il reste enregistré sur cet appareil.");
 
     const handleDownloadVaccinationProfile = () => {
@@ -1222,34 +1213,23 @@ export default function ToolsPage() {
     );
   };
 
-  const CommunitySupportTool = () => {
-    return (
-      <CommunitySupportToolPanel
-        language={language}
-        onDownloadFile={downloadTextFile}
-      />
-    );
-  };
-
   // Render selected tool
   const renderTool = () => {
     switch (activeTool) {
       case "pregnancy":
-        return <PregnancyCalculator />;
+        return PregnancyCalculator();
       case "baby":
-        return <BabyGrowthTracker />;
+        return BabyGrowthTracker();
       case "temperature":
-        return <TemperatureTracker />;
+        return TemperatureTracker();
       case "emergency":
-        return <EmergencyContacts />;
+        return EmergencyContacts();
       case "vaccination":
-        return <VaccinationSchedule />;
+        return VaccinationSchedule();
       case "nutrition":
-        return <NutritionGuide />;
+        return NutritionGuide();
       case "development":
-        return <DevelopmentMilestones />;
-      case "community":
-        return <CommunitySupportTool />;
+        return DevelopmentMilestones();
       default:
         return (
           <div className="text-center py-12">

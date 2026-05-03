@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { deleteDoctorArticle, getDoctorArticles, getDoctorProfiles, getDoctorVideos, submitDoctorQuestion } from "@/lib/firestore";
+import { createDoctorAppointment, deleteDoctorArticle, getDoctorArticles, getDoctorProfiles, getDoctorVideos, getPatientAppointments, submitDoctorQuestion } from "@/lib/firestore";
 import {
   buildSpecialtyDoctorProfiles,
   getProfileInitials,
@@ -24,10 +24,13 @@ import {
   AlertTriangle,
   ArrowRight,
   Calendar,
+  Download,
+  ExternalLink,
   FileText,
   Heart,
   MapPin,
   MessageCircle,
+  Phone,
   PlayCircle,
   Send,
   ShieldCheck,
@@ -89,6 +92,13 @@ export default function SpecialtyDoctorPublicPage({
   const [questionBody, setQuestionBody] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [apptDate, setApptDate] = useState("");
+  const [apptTime, setApptTime] = useState("");
+  const [apptMotif, setApptMotif] = useState("");
+  const [apptSending, setApptSending] = useState(false);
+  const [apptSent, setApptSent] = useState(false);
+  const [patientAppointments, setPatientAppointments] = useState([]);
+  const [activeJitsiUrl, setActiveJitsiUrl] = useState("");
   const [loadError, setLoadError] = useState("");
   const [articleDeletingId, setArticleDeletingId] = useState("");
   const [pendingDeleteArticle, setPendingDeleteArticle] = useState(null);
@@ -121,6 +131,25 @@ export default function SpecialtyDoctorPublicPage({
   useEffect(() => {
     setVideos([]);
   }, [specialtyKey]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setPatientAppointments([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    getPatientAppointments(user.uid).then((appts) => {
+      if (!cancelled) {
+        setPatientAppointments(Array.isArray(appts) ? appts : []);
+      }
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid]);
 
   useEffect(() => {
     let cancelled = false;
@@ -320,7 +349,39 @@ export default function SpecialtyDoctorPublicPage({
       return;
     }
 
-    document.getElementById("contact-form")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("appointment-form")?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  async function handleSubmitAppointment(event) {
+    event.preventDefault();
+
+    if (!user || !apptDate.trim() || !apptMotif.trim()) {
+      return;
+    }
+
+    setApptSending(true);
+
+    try {
+      await createDoctorAppointment({
+        doctorProfileId: String(selectedProfile?.id || "").trim(),
+        doctorId: String(selectedProfile?.editorUserId || "").trim(),
+        doctorName: String(selectedProfile?.displayName || "").trim(),
+        patientId: user.uid,
+        patientName: userProfile?.name || user.displayName || "Anonim",
+        preferredDate: apptDate.trim(),
+        preferredTime: apptTime.trim(),
+        motif: apptMotif.trim(),
+      });
+      setApptDate("");
+      setApptTime("");
+      setApptMotif("");
+      setApptSent(true);
+      window.setTimeout(() => setApptSent(false), 5000);
+    } catch (error) {
+      console.error("Submit doctor appointment error:", error);
+    } finally {
+      setApptSending(false);
+    }
   }
 
   function handleOpenQuestionForm() {
@@ -363,8 +424,47 @@ export default function SpecialtyDoctorPublicPage({
     }
   }
 
+  const confirmedPatientAppointments = patientAppointments.filter((a) => a.status === "confirmed" && a.meetingUrl);
+
   return (
     <div className={theme.pageClassName}>
+      {activeJitsiUrl ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-black">
+          <div className="flex shrink-0 items-center justify-between gap-3 bg-slate-900 px-4 py-3">
+            <div className="flex items-center gap-2 text-white">
+              <Video className="h-4 w-4 text-indigo-400" />
+              <span className="text-sm font-medium">
+                {language === "ht" ? "Konsiltasyon vityèl" : "Consultation virtuelle"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={activeJitsiUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-500 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                {language === "ht" ? "Nouvo tab" : "Nouvel onglet"}
+              </a>
+              <button
+                type="button"
+                onClick={() => setActiveJitsiUrl("")}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-600 px-3 py-1.5 text-sm text-white hover:bg-slate-700"
+              >
+                {language === "ht" ? "Fèmen" : "Fermer"}
+              </button>
+            </div>
+          </div>
+          <iframe
+            src={activeJitsiUrl}
+            allow="camera; microphone; fullscreen; display-capture; autoplay"
+            allowFullScreen
+            className="flex-1 w-full border-0"
+            title="Consultation virtuelle Jitsi"
+          />
+        </div>
+      ) : null}
       <div className="mx-auto max-w-7xl">
         {loadError ? (
           <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -434,9 +534,9 @@ export default function SpecialtyDoctorPublicPage({
                 </div>
 
                 <div className="flex flex-wrap gap-3">
-                  <Button className={theme.primaryButtonClassName} onClick={handleBookAppointment}>
-                    <Calendar className="mr-2 h-4 w-4" />
-                    {selectedProfile?.bookingUrl ? ui.requestAppointment : ui.askTeam}
+                  <Button className={theme.primaryButtonClassName} onClick={handleOpenQuestionForm}>
+                    <MessageCircle className="mr-2 h-4 w-4" />
+                    {ui.askTeam}
                   </Button>
                   {selectedProfileFeaturedVideo?.url ? (
                     <Button variant="outline" onClick={() => window.open(selectedProfileFeaturedVideo.url, "_blank", "noreferrer")}>
@@ -626,6 +726,27 @@ export default function SpecialtyDoctorPublicPage({
                             ) : null}
                             {article.authorSpecialty ? <span>{article.authorSpecialty}</span> : null}
                           </div>
+                          {article.pdfUrl ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <a
+                                href={article.pdfUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                                {language === "ht" ? "Gade PDF a" : "Prévisualiser le PDF"}
+                              </a>
+                              <a
+                                href={article.pdfUrl}
+                                download={article.pdfName || "article.pdf"}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                              >
+                                <Download className="h-3 w-3" />
+                                {language === "ht" ? "Telechaje PDF a" : "Télécharger le PDF"}
+                              </a>
+                            </div>
+                          ) : null}
                           {canDeleteArticle ? (
                             <div className="mt-3">
                               <Button
@@ -645,6 +766,86 @@ export default function SpecialtyDoctorPublicPage({
                     );
                   })}
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card id="appointment-form" className="health-card">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Video className={theme.sectionIconClassName} />
+                  {language === "ht" ? "Mande yon konsiltasyon vityèl" : "Demander une consultation virtuelle"}
+                </CardTitle>
+                <CardDescription>
+                  {language === "ht"
+                    ? "Chwazi yon dat ak lè ou prefere. Doktè a pral konfime randevou an epi voye yon lyen videyo pou ou."
+                    : "Choisissez une date et une heure préférées. Le médecin confirmera le rendez-vous et vous enverra un lien vidéo."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!user ? (
+                  <p className="text-sm text-slate-600">{language === "ht" ? "Konekte pou mande yon randevou." : "Connectez-vous pour demander un rendez-vous."}</p>
+                ) : (
+                  <form onSubmit={handleSubmitAppointment} className="space-y-4">
+                    {apptSent ? (
+                      <div className={theme.successMessageClassName}>
+                        {language === "ht"
+                          ? "Demann ou an voye! Doktè a pral kontakte ou rapidman."
+                          : "Demande envoyée ! Le médecin vous contactera bientôt."}
+                      </div>
+                    ) : null}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-slate-700">
+                          {language === "ht" ? "Dat ou prefere" : "Date préférée"}
+                        </label>
+                        <Input
+                          type="date"
+                          value={apptDate}
+                          onChange={(e) => setApptDate(e.target.value)}
+                          min={new Date().toISOString().split("T")[0]}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-slate-700">
+                          {language === "ht" ? "Lè ou prefere (opsyonèl)" : "Heure préférée (facultatif)"}
+                        </label>
+                        <Input
+                          type="time"
+                          value={apptTime}
+                          onChange={(e) => setApptTime(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium text-slate-700">
+                        {language === "ht" ? "Rezon konsiltasyon an" : "Motif de la consultation"}
+                      </label>
+                      <Textarea
+                        placeholder={language === "ht" ? "Dekri rezon konsiltasyon an..." : "Décrivez le motif de la consultation..."}
+                        value={apptMotif}
+                        onChange={(e) => setApptMotif(e.target.value)}
+                        className="min-h-[100px]"
+                        required
+                      />
+                    </div>
+                    <Button
+                      type="submit"
+                      className={theme.fullPrimaryButtonClassName}
+                      disabled={apptSending || !apptDate.trim() || !apptMotif.trim()}
+                    >
+                      <Video className="mr-2 h-4 w-4" />
+                      {apptSending
+                        ? (language === "ht" ? "Ap voye..." : "Envoi en cours...")
+                        : (language === "ht" ? "Voye demann randevou" : "Envoyer la demande")}
+                    </Button>
+                    <p className="text-xs leading-5 text-slate-500">
+                      {language === "ht"
+                        ? "Randevou yo konfime pa doktè a. Ou ap resevwa yon lyen Jitsi pou konsiltasyon vityèl la."
+                        : "Les rendez-vous sont confirmés par le médecin. Vous recevrez un lien Jitsi pour la consultation vidéo."}
+                    </p>
+                  </form>
+                )}
               </CardContent>
             </Card>
 
@@ -689,6 +890,43 @@ export default function SpecialtyDoctorPublicPage({
           </div>
 
           <div className="space-y-6">
+            {confirmedPatientAppointments.length > 0 ? (
+              <Card className="health-card border-indigo-100 bg-indigo-50/40">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-indigo-800">
+                    <Video className="h-4 w-4 text-indigo-600" />
+                    {language === "ht" ? "Randevou konfime" : "Rendez-vous confirmés"}
+                  </CardTitle>
+                  <CardDescription>
+                    {language === "ht"
+                      ? "Doktè a konfime randevou ou yo. Klike pou antre nan konsiltasyon an."
+                      : "Le médecin a confirmé vos rendez-vous. Cliquez pour rejoindre la consultation."}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {confirmedPatientAppointments.map((appt) => (
+                    <div key={appt.id} className="rounded-2xl border border-indigo-100 bg-white p-3 space-y-2">
+                      <div className="text-sm font-medium text-slate-800">{appt.doctorName || "—"}</div>
+                      {appt.preferredDate ? (
+                        <div className="text-xs text-slate-500">
+                          {appt.preferredDate}{appt.preferredTime ? ` — ${appt.preferredTime}` : ""}
+                        </div>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-sm"
+                        onClick={() => setActiveJitsiUrl(appt.meetingUrl)}
+                      >
+                        <Video className="mr-1.5 h-3.5 w-3.5" />
+                        {language === "ht" ? "Antre nan konsiltasyon" : "Rejoindre la consultation"}
+                      </Button>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
+
             <Card className="health-card">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -701,10 +939,46 @@ export default function SpecialtyDoctorPublicPage({
                   <MessageCircle className="mr-2 h-4 w-4" />
                   {ui.askTeam}
                 </Button>
-                <Button variant="outline" className="w-full" onClick={handleBookAppointment}>
-                  <Calendar className="mr-2 h-4 w-4" />
-                  {selectedProfile?.bookingUrl ? ui.requestAppointment : ui.contactTitle}
+                <Button variant="outline" className="w-full" onClick={() => document.getElementById("appointment-form")?.scrollIntoView({ behavior: "smooth" })}>
+                  <Video className="mr-2 h-4 w-4" />
+                  {ui.virtualConsultLabel || (language === "ht" ? "Konsiltasyon vityèl" : "Consultation virtuelle")}
                 </Button>
+                {(() => {
+                  const bUrl = selectedProfile?.bookingUrl || "";
+                  if (bUrl.startsWith("tel:")) {
+                    return (
+                      <div className="w-full rounded-md border border-input bg-background px-4 py-2 text-sm">
+                        <p className="text-xs text-slate-500 mb-1">{ui.requestAppointment}</p>
+                        <a
+                          href={bUrl}
+                          className="flex items-center gap-2 font-medium text-slate-800 hover:text-indigo-600"
+                        >
+                          <Phone className="h-3.5 w-3.5 shrink-0" />
+                          {bUrl.replace("tel:", "")}
+                        </a>
+                      </div>
+                    );
+                  }
+                  if (bUrl && !bUrl.startsWith("#")) {
+                    return (
+                      <a
+                        href={bUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground"
+                      >
+                        <Calendar className="h-4 w-4" />
+                        {ui.requestAppointment}
+                      </a>
+                    );
+                  }
+                  return (
+                    <Button variant="outline" className="w-full" onClick={() => document.getElementById("contact-form")?.scrollIntoView({ behavior: "smooth" })}>
+                      <Calendar className="mr-2 h-4 w-4" />
+                      {ui.requestAppointment}
+                    </Button>
+                  );
+                })()}
                 {selectedProfileFeaturedVideo?.url ? (
                   <Button variant="outline" className="w-full" onClick={() => window.open(selectedProfileFeaturedVideo.url, "_blank", "noreferrer")}>
                     <Video className="mr-2 h-4 w-4" />

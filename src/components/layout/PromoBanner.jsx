@@ -2,19 +2,29 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { X, Gift, Heart, Baby, Sparkles, ShoppingBag, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, Gift, Heart, Baby, Sparkles, ShoppingBag, ChevronLeft, ChevronRight, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const promos = [
   {
     id: "fete-meres",
     icon: Heart,
-    title: "Bòn Fèt Manman!",
-    description: "Jwenn sipriz espesyal pou Fèt Manman yo — rabè, kado, ak plis ankò!",
-    cta: "Wè sipriz yo",
-    link: "/guides",
+    title: "🌸 Bòn Fèt Manman!",
+    description: "Patisipe nan Konkou Fèt Manman an — kiz, piblikasyon, parennaj. Gwo pri pou genyen!",
+    cta: "Patisipe nan konkou",
+    link: "/concours",
     gradient: "linear-gradient(135deg, #ff6b8a 0%, #ee2d5f 50%, #c2185b 100%)",
     btnColor: "#c2185b",
+  },
+  {
+    id: "concours-fete-meres",
+    icon: Trophy,
+    title: "🏆 Konkou Fèt Manman",
+    description: "100 kesyon sou sante ak timoun · Vote pi bon piblikasyon · Envite zanmi ou · Pri sipriz anonse 31 me!",
+    cta: "Wè règleman an",
+    link: "/concours",
+    gradient: "linear-gradient(135deg, #f59e0b 0%, #d97706 40%, #b45309 100%)",
+    btnColor: "#92400e",
   },
   {
     id: "nouvo-manman",

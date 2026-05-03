@@ -96,6 +96,7 @@ export default function OnboardingPage() {
         noGroups: "Pa gen gwoup sijere pou kounye a, men ou ka kontinye.",
         noMembers: "Pa gen kont sijere pou kounye a, men ou ka kontinye.",
         recommendationsLoadError: "Nou pa t ka chaje rekòmandasyon yo kounye a. Ou ka kontinye onboarding lan menm jan an.",
+        skip: "Pase pou kounye a",
         followLabel: "Swiv",
         joinedLabel: "Rejwenn",
         selectedLabel: "Chwazi",
@@ -138,6 +139,7 @@ export default function OnboardingPage() {
         noGroups: "Aucun groupe suggéré pour le moment, mais vous pouvez continuer.",
         noMembers: "Aucun compte suggéré pour le moment, mais vous pouvez continuer.",
         recommendationsLoadError: "Les recommandations n'ont pas pu être chargées pour le moment. Vous pouvez continuer l'onboarding normalement.",
+        skip: "Passer pour l'instant",
         followLabel: "Suivre",
         joinedLabel: "Rejoindre",
         selectedLabel: "Sélectionné",
@@ -411,6 +413,28 @@ export default function OnboardingPage() {
     setStep((current) => Math.min(current + 1, 2));
   }
 
+  async function handleSkipOnboarding() {
+    if (!user) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    try {
+      await updateUserProfile(user.uid, {
+        onboardingCompletedAt: new Date().toISOString(),
+      });
+      await refreshProfile();
+      router.replace("/feed");
+    } catch (saveError) {
+      console.error("Onboarding skip error:", saveError);
+      router.replace("/feed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleFinish() {
     if (!user) {
       return;
@@ -665,9 +689,14 @@ export default function OnboardingPage() {
       )}
 
       <div className="flex items-center justify-between gap-3">
-        <Button type="button" variant="outline" className="rounded-xl" onClick={() => setStep((current) => Math.max(current - 1, 0))} disabled={step === 0 || saving}>
-          {ui.back}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" className="rounded-xl" onClick={() => setStep((current) => Math.max(current - 1, 0))} disabled={step === 0 || saving}>
+            {ui.back}
+          </Button>
+          <Button type="button" variant="ghost" className="rounded-xl text-slate-400 hover:text-slate-600" onClick={handleSkipOnboarding} disabled={saving}>
+            {ui.skip}
+          </Button>
+        </div>
         {step < 2 ? (
           <Button type="button" className="rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 shadow-sm shadow-rose-200" onClick={handleNext}>
             {ui.next}
